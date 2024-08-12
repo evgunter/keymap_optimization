@@ -2,23 +2,26 @@ use core::fmt;
 use rand::distributions::{Distribution, Standard};
 use strum::{EnumCount, VariantArray};
 use std::marker::PhantomData;
+use serde::{Serialize};
 
-// This file contains definitions of the traits that need to be instantiated by a keyboard config.
-// TODO: remove Debug
-pub trait Key: Sized + fmt::Display + PartialEq + Copy + EnumCount + VariantArray + fmt::Debug {}
+// This file contains definitions of the traits that need to be instantiated by a keyboard config, and the associated generic data structures.
+
+pub trait Key: Sized + fmt::Display + PartialEq + Copy + EnumCount + VariantArray + fmt::Debug + serde::Serialize {}
 
 impl<T> Key for T
 where
-    T: Sized + fmt::Display + PartialEq + Copy + EnumCount + VariantArray + fmt::Debug + Distribution<Standard>,
+    T: Sized + fmt::Display + PartialEq + Copy + EnumCount + VariantArray + fmt::Debug + serde::Serialize + Distribution<Standard>,
 {}
 
-pub trait Layout<K: Key, const N: usize>: Sized {
+pub trait Layout<K: Key, const N: usize>: Sized + serde::Serialize {
     fn fmt_chord(chord: &Chord<K, N, Self>, f: &mut fmt::Formatter) -> fmt::Result;
 }
 
 // A combination of keys pressed simultaneously.
+#[derive(Serialize)]
 #[derive(Debug)]
 pub struct Chord<K: Key, const N: usize, L: Layout<K, N>> {  // N is the number of distinct keys that there are, i.e. Key::COUNT (which can't be used here since it's a generic)
+    #[serde(with = "serde_arrays")]
     keys: [bool; N],
     _marker0: PhantomData<K>,
     _marker1: PhantomData<L>,
