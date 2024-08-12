@@ -1,13 +1,14 @@
 use crate::keyboard_config::{Chord, Layout, Key};
+use rand::distributions::{Distribution, Standard};
+use strum::{EnumCount, VariantArray};
+use std::fmt;
 
 // Information specific to the type of keyboard being used--in this case, a Twiddler chording keyboard.
 
 // A list of all the keys on the keyboard, with the original labels they have on the Twiddler.
 #[derive(Debug)]  // TODO: remove
-#[derive(strum_macros::Display)]
-#[derive(PartialEq)]
-#[derive(Clone)]
-#[derive(Copy)]
+#[derive(strum_macros::Display, strum_macros::EnumCount, strum_macros::VariantArray)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum TwiddlerKey {
     Z0,  // Num
     L0,  // Alt
@@ -32,6 +33,13 @@ pub enum TwiddlerKey {
 
 impl Key for TwiddlerKey {}
 
+impl Distribution<TwiddlerKey> for Standard {
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> TwiddlerKey {
+        let index = rng.gen_range(0..TwiddlerKey::COUNT);
+        TwiddlerKey::VARIANTS[index]
+    }
+}
+
 pub struct TwiddlerLayout;
 
 impl TwiddlerLayout {
@@ -51,39 +59,38 @@ impl TwiddlerLayout {
     ];
 }
 
-impl Layout<TwiddlerKey> for TwiddlerLayout {
-    fn display_chord(&self, chord: Chord<TwiddlerKey>) {
-        let if_chord_contains = |key: TwiddlerKey, symb_yes: &'static str, symb_no: &'static str| -> () {
-            if chord.keys.contains(&key) {
-                print!("{}", symb_yes);
+impl Layout<TwiddlerKey, { TwiddlerKey::COUNT }> for TwiddlerLayout {
+    fn fmt_chord(chord: &Chord<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, f: &mut fmt::Formatter) -> fmt::Result {
+        let if_chord_contains = |f: &mut fmt::Formatter, key: TwiddlerKey, symb_yes: &'static str, symb_no: &'static str| -> fmt::Result {
+            if chord.contains(key) {
+                write!(f, "{}", symb_yes)
             } else {
-                print!("{}", symb_no);
+                write!(f, "{}", symb_no)
             }
         };
 
         for key in TwiddlerLayout::THUMB {
-            if_chord_contains(key, "⚫", "⚪");
+            if_chord_contains(f, key, "⚫", "⚪")?;
         }
-        println!();
+        writeln!(f)?;
         
-        // if any of the mouse buttons are pressed, print that row; otherwise, skip the row entirely
-        if TwiddlerLayout::MAIN[0].iter().any(|key| chord.keys.contains(key)) {
-            print!(" ");  // The thumb has one more key than the rows
+        // if any of the mouse buttons are pressed, write that row; otherwise, skip the row entirely
+        if TwiddlerLayout::MAIN[0].iter().any(|key| chord.contains(*key)) {
+            write!(f, " ")?;  // The thumb has one more key than the rows
             for key in TwiddlerLayout::MAIN[0] {
                 // Uses a different color to prevent confusion
-                if_chord_contains(key, "🔴", "⚪");
+                if_chord_contains(f, key, "🔴", "⚪")?;
             }
-            println!();
+            writeln!(f)?;
         }
 
-        for row in TwiddlerLayout::MAIN {
-            print!(" ");  // The thumb has one more key than the rows
+        for row in TwiddlerLayout::MAIN[1..].iter() {
+            write!(f, " ")?;  // The thumb has one more key than the rows
             for key in row {
-                if_chord_contains(key, "⚫", "⚪");
+                if_chord_contains(f, *key, "⚫", "⚪")?;
             }
-            println!();
+            writeln!(f)?;
         }
-        println!();
+        writeln!(f)
     }
 }
-
