@@ -4,7 +4,7 @@ use strum::{EnumCount, VariantArray};
 use std::marker::PhantomData;
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 
-// This file contains definitions of the traits that need to be instantiated by a keyboard config, and the associated generic data structures.
+// this file contains definitions of the traits that need to be instantiated by a keyboard config, and the associated generic data structures.
 
 pub trait Key: Sized + fmt::Display + PartialEq + Copy + EnumCount + VariantArray + fmt::Debug + Serialize + DeserializeOwned
 where
@@ -15,7 +15,7 @@ pub trait Layout<K: Key, const N: usize>: Sized + Serialize + DeserializeOwned w
     fn fmt_chord(chord: &Chord<K, N, Self>, f: &mut fmt::Formatter) -> fmt::Result;
 }
 
-// A combination of keys pressed simultaneously.
+// a combination of keys pressed simultaneously
 #[derive(PartialEq)]
 #[derive(Serialize, Deserialize)]
 #[derive(Debug)]
@@ -52,6 +52,12 @@ impl<K: Key, const N: usize, L: Layout<K, N>> Chord<K, N, L> where Standard: Dis
 
     pub fn n_keys(&self) -> usize {
         self.keys.iter().filter(|&&x| x).count()
+    }
+
+    // allow direct editing of the private field .keys in the unit tests
+    #[cfg(test)]
+    pub(crate) fn get_raw_keys(&mut self) -> &mut [bool] {
+        &mut self.keys
     }
 }
 

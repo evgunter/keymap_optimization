@@ -1,7 +1,7 @@
-use gather_chord_preferences::keyboard_config_twiddler::{TwiddlerKey, TwiddlerLayout};
+use keymap_optimization::twiddler::{TwiddlerKey, TwiddlerLayout};
 use strum::EnumCount;
 
-use gather_chord_preferences::gather_chords::{gather_and_save_data, TrialResults};
+use keymap_optimization::chord_preferences::{gather_and_save_data, TrialResults};
 
 const RESULTS_PATH: &str = "./data";
 

@@ -7,11 +7,17 @@ const N_REPETITIONS_PER_TRIAL: usize = 5;
 
 #[derive(PartialEq, Debug)]
 #[derive(Serialize, Deserialize)]
+pub enum ErrCode {
+    Impossible,
+}
+
+#[derive(PartialEq, Debug)]
+#[derive(Serialize, Deserialize)]
 #[serde(bound = "K: DeserializeOwned, L: DeserializeOwned")]
 pub struct TrialData<K: Key, const N: usize, L: Layout<K, N>> where Standard: Distribution<K> {
-    chord_pair: [Chord<K, N, L>; 2],
-    n_repetitions: usize,
-    time: f64,
+    pub chord_pair: [Chord<K, N, L>; 2],
+    pub n_repetitions: usize,
+    pub time: Result<f64, ErrCode>,
 }
 
 #[derive(PartialEq, Debug)]
@@ -45,32 +51,20 @@ impl<K: Key, const N: usize, L: Layout<K, N>> TrialResults<K, N, L> where Standa
     }
 }
 
-fn sample_by_exp<R: Rng>(rng: &mut R, div: f64) -> usize {
-    let normalization: f64 = (1.0 / div).exp() - 1.0;
-    let quantile: f64 = rng.gen();
-    let mut partial_sum: f64 = 0.0;
-    let mut n: usize = 0;
-    while partial_sum < quantile {
-        n += 1;
-        partial_sum += (-((n - 1) as f64) / div).exp() * normalization;
-    }
-    n
-}
-
-fn generate_random_chord_pair<R: Rng, K: Key, const N: usize, L: Layout<K, N>>(rng: &mut R) -> [Chord<K, N, L>; 2] where Standard: Distribution<K> {
-    // sample m keys according to distribution ~ e^(-(m-1)/3)
-    let mut chords: [Chord<K, N, L>; 2] = [Chord::new(), Chord::new()];
-    for chord in chords.iter_mut() {
-        let n_keys: usize = sample_by_exp(rng, 4.0);
-        // choose keys uniformly at random
-        while chord.n_keys() < n_keys {
-            let key: K = rng.gen();
-            if !chord.contains(key) {
-                chord.add_key(key);
-            }
+pub fn random_chord<R: Rng, K: Key, const N: usize, L: Layout<K, N>>(rng: &mut R, threshold: f64) -> Chord<K, N, L> where Standard: Distribution<K> {
+    // Sample a random chord with a number of keys distributed almost exponentially with base 1/threshold
+    // (not exactly exponential because we are sampling with replacement and we always sample at least one key)
+    let mut chord = Chord::new();
+    chord.add_key(rng.gen::<K>());  // ensure that the chord contains at least one key
+    loop {
+        let val: f64 = rng.gen::<f64>();
+        if val < threshold {
+            chord.add_key(rng.gen::<K>());
+        } else {
+            break;
         }
-    };
-    chords
+    }
+    chord
 }
 
 fn get_expected_input<K: Key, const N: usize, L: Layout<K, N>>(chords: &[Chord<K, N, L>; 2]) -> String where Standard: Distribution<K> {
@@ -95,17 +89,18 @@ fn gather_data<K: Key, const N: usize, L: Layout<K, N>>() -> Result<TrialResults
     println!("You will be shown two chords. After some time to practice, you will need to type this pair of chords {} times, as quickly as possible.", N_REPETITIONS_PER_TRIAL);
     
     let mut results: TrialResults<K, N, L> = TrialResults::new();
+    const THRESHOLD: f64 = 0.8;
 
     // Run trials until the user quits
     loop {
-        let chords: [Chord<K, N, L>; 2] = generate_random_chord_pair(&mut rng);
+        let chords = [random_chord(&mut rng, THRESHOLD), random_chord(&mut rng, THRESHOLD)];
         for chord in &chords {
             println!("{}", chord);
         }
 
         'trial: loop {
             let mut practice_input = String::new();
-            println!("Type GO when you're ready to continue, or QUIT to quit. Hit Enter after you're done typing the chords.");
+            println!("Type GO when you're ready to continue, IMP if this contains an impossible combination, SKIP to skip this pair without recording any data, or QUIT to quit. Hit Enter after you're done typing the chords.");
             std::io::stdin().read_line(&mut practice_input)?;
             if practice_input == "GO\n" {
                 let mut trial_input = String::new();
@@ -123,7 +118,7 @@ fn gather_data<K: Key, const N: usize, L: Layout<K, N>>() -> Result<TrialResults
                         let trial_data = TrialData {
                             chord_pair: chords,
                             n_repetitions: N_REPETITIONS_PER_TRIAL,
-                            time: trial_time,
+                            time: Ok(trial_time),
                         };
                         results.push(trial_data);
                         break 'trial;
@@ -133,6 +128,16 @@ fn gather_data<K: Key, const N: usize, L: Layout<K, N>>() -> Result<TrialResults
                         println!("Please type Y or N.");
                     }
                 }
+            } else if practice_input == "SKIP\n" {
+                break 'trial;
+            } else if practice_input == "IMP\n" {
+                let trial_data = TrialData {
+                    chord_pair: chords,
+                    n_repetitions: N_REPETITIONS_PER_TRIAL,
+                    time: Err(ErrCode::Impossible),
+                };
+                results.push(trial_data);
+                break 'trial;
             } else if practice_input == "QUIT\n" {
                 println!("Quitting...");
                 return Ok(results);
