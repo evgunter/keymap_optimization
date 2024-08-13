@@ -2,32 +2,34 @@ use core::fmt;
 use rand::distributions::{Distribution, Standard};
 use strum::{EnumCount, VariantArray};
 use std::marker::PhantomData;
-use serde::{Serialize};
+use serde::{Serialize, Deserialize, de::DeserializeOwned};
 
 // This file contains definitions of the traits that need to be instantiated by a keyboard config, and the associated generic data structures.
 
-pub trait Key: Sized + fmt::Display + PartialEq + Copy + EnumCount + VariantArray + fmt::Debug + serde::Serialize {}
-
-impl<T> Key for T
+pub trait Key: Sized + fmt::Display + PartialEq + Copy + EnumCount + VariantArray + fmt::Debug + Serialize + DeserializeOwned
 where
-    T: Sized + fmt::Display + PartialEq + Copy + EnumCount + VariantArray + fmt::Debug + serde::Serialize + Distribution<Standard>,
+    Standard: Distribution<Self>
 {}
 
-pub trait Layout<K: Key, const N: usize>: Sized + serde::Serialize {
+pub trait Layout<K: Key, const N: usize>: Sized + Serialize + DeserializeOwned where Standard: Distribution<K> {
     fn fmt_chord(chord: &Chord<K, N, Self>, f: &mut fmt::Formatter) -> fmt::Result;
 }
 
 // A combination of keys pressed simultaneously.
-#[derive(Serialize)]
+#[derive(PartialEq)]
+#[derive(Serialize, Deserialize)]
 #[derive(Debug)]
-pub struct Chord<K: Key, const N: usize, L: Layout<K, N>> {  // N is the number of distinct keys that there are, i.e. Key::COUNT (which can't be used here since it's a generic)
+// N is the number of distinct keys that there are, i.e. Key::COUNT (which can't be used here since it's a generic)
+pub struct Chord<K: Key, const N: usize, L: Layout<K, N>> where Standard: Distribution<K> {
     #[serde(with = "serde_arrays")]
     keys: [bool; N],
+    #[serde(skip)]
     _marker0: PhantomData<K>,
+    #[serde(skip)]
     _marker1: PhantomData<L>,
 }
 
-impl<K: Key, const N: usize, L: Layout<K, N>> Chord<K, N, L> {
+impl<K: Key, const N: usize, L: Layout<K, N>> Chord<K, N, L> where Standard: Distribution<K> {
     pub fn new() -> Self {
         Self {
             keys: [false; N],
@@ -53,7 +55,7 @@ impl<K: Key, const N: usize, L: Layout<K, N>> Chord<K, N, L> {
     }
 }
 
-impl<K: Key, const N: usize, L: Layout<K, N>> fmt::Display for Chord<K, N, L> {
+impl<K: Key, const N: usize, L: Layout<K, N>> fmt::Display for Chord<K, N, L> where Standard: Distribution<K> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         L::fmt_chord(&self, f)
     }

@@ -1,23 +1,27 @@
 use rand::Rng;
 use crate::keyboard_config::{Key, Chord, Layout};
 use rand::distributions::{Distribution, Standard};
-use serde::{Serialize};
+use serde::{Serialize, Deserialize, de::DeserializeOwned};
 
 const N_REPETITIONS_PER_TRIAL: usize = 5;
 
-#[derive(Serialize)]
-pub struct TrialData<K: Key, const N: usize, L: Layout<K, N>> {
+#[derive(PartialEq, Debug)]
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "K: DeserializeOwned, L: DeserializeOwned")]
+pub struct TrialData<K: Key, const N: usize, L: Layout<K, N>> where Standard: Distribution<K> {
     chord_pair: [Chord<K, N, L>; 2],
     n_repetitions: usize,
     time: f64,
 }
 
-#[derive(Serialize)]
-pub struct TrialResults<K: Key, const N: usize, L: Layout<K, N>> {
+#[derive(PartialEq, Debug)]
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "K: DeserializeOwned, L: DeserializeOwned")]
+pub struct TrialResults<K: Key, const N: usize, L: Layout<K, N>> where Standard: Distribution<K> {
     pub data: Vec<TrialData<K, N, L>>,
 }
 
-impl<K: Key, const N: usize, L: Layout<K, N>> TrialResults<K, N, L> {
+impl<K: Key, const N: usize, L: Layout<K, N>> TrialResults<K, N, L> where Standard: Distribution<K> {
     pub fn new() -> Self {
         Self {
             data: Vec::new(),
@@ -32,6 +36,12 @@ impl<K: Key, const N: usize, L: Layout<K, N>> TrialResults<K, N, L> {
         let file = std::fs::File::create(filename)?;
         serde_json::to_writer(file, self)?;
         Ok(())
+    }
+
+    pub fn load(filename: &str) -> std::io::Result<Self> {
+        let file = std::fs::File::open(filename)?;
+        let results = serde_json::from_reader(file)?;
+        Ok(results)
     }
 }
 
@@ -63,7 +73,7 @@ fn generate_random_chord_pair<R: Rng, K: Key, const N: usize, L: Layout<K, N>>(r
     chords
 }
 
-fn get_expected_input<K: Key, const N: usize, L: Layout<K, N>>(chords: &[Chord<K, N, L>; 2]) -> String {
+fn get_expected_input<K: Key, const N: usize, L: Layout<K, N>>(chords: &[Chord<K, N, L>; 2]) -> String where Standard: Distribution<K> {
     let mut expected = String::new();
     for chord in chords {
         for key in K::VARIANTS.iter() {
@@ -80,7 +90,7 @@ fn count_errors(_actual_input: &str, _expected_input: String) -> usize {
     0
 }
 
-pub fn gather_data<K: Key, const N: usize, L: Layout<K, N>>() -> Result<TrialResults<K, N, L>, std::io::Error> where Standard: Distribution<K> {
+fn gather_data<K: Key, const N: usize, L: Layout<K, N>>() -> Result<TrialResults<K, N, L>, std::io::Error> where Standard: Distribution<K> {
     let mut rng = rand::thread_rng();
     println!("You will be shown two chords. After some time to practice, you will need to type this pair of chords {} times, as quickly as possible.", N_REPETITIONS_PER_TRIAL);
     
@@ -131,4 +141,10 @@ pub fn gather_data<K: Key, const N: usize, L: Layout<K, N>>() -> Result<TrialRes
 
 
     }
+}
+
+pub fn gather_and_save_data<K: Key, const N: usize, L: Layout<K, N>>(filename: &str) -> Result<TrialResults<K, N, L>, std::io::Error> where Standard: Distribution<K> {
+    let results = gather_data::<K, N, L>()?;
+    results.save(filename)?;
+    Ok(results)
 }

@@ -2,14 +2,14 @@ use crate::keyboard_config::{Chord, Layout, Key};
 use rand::distributions::{Distribution, Standard};
 use strum::{EnumCount, VariantArray};
 use std::fmt;
-use serde::{Serialize};
+use serde::{Serialize, Deserialize};
 
 // Information specific to the type of keyboard being used--in this case, a Twiddler chording keyboard.
 
 // A list of all the keys on the keyboard, with the original labels they have on the Twiddler.
 #[derive(Debug)]
 #[derive(strum_macros::Display, strum_macros::EnumCount, strum_macros::VariantArray)]
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[derive(PartialEq, Clone, Copy)]
 pub enum TwiddlerKey {
     Z0,  // Num
@@ -42,7 +42,9 @@ impl Distribution<TwiddlerKey> for Standard {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Debug)]
+#[derive(PartialEq)]
+#[derive(Serialize, Deserialize)]
 pub struct TwiddlerLayout;
 
 impl TwiddlerLayout {
