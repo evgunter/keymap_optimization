@@ -4,9 +4,9 @@ use strum::{EnumCount, VariantArray};
 use std::fmt;
 use serde::{Serialize, Deserialize};
 
-// Information specific to the type of keyboard being used--in this case, a Twiddler chording keyboard.
+// information specific to the type of keyboard being used--in this case, a twiddler chording keyboard.
 
-// A list of all the keys on the keyboard, with the original labels they have on the Twiddler.
+// a list of all the keys on the keyboard, with the original labels they have on the twiddler.
 #[derive(Debug)]
 #[derive(strum_macros::Display, strum_macros::EnumCount, strum_macros::VariantArray)]
 #[derive(Serialize, Deserialize)]
@@ -16,9 +16,9 @@ pub enum TwiddlerKey {
     L0,  // Alt
     M0,  // Ctrl
     R0,  // Shft
-    LX,  // [Left mouse button]
-    MX,  // [Middle mouse button]
-    RX,  // [Right mouse button]
+    LX,  // [left mouse button]
+    MX,  // [middle mouse button]
+    RX,  // [right mouse button]
     L1,  // A
     M1,  // E
     R1,  // SP
@@ -81,16 +81,16 @@ impl Layout<TwiddlerKey, { TwiddlerKey::COUNT }> for TwiddlerLayout {
         
         // if any of the mouse buttons are pressed, write that row; otherwise, skip the row entirely
         if TwiddlerLayout::MAIN[0].iter().any(|key| chord.contains(*key)) {
-            write!(f, " ")?;  // The thumb has one more key than the rows
+            write!(f, " ")?;  // the thumb has one more key than the rows
             for key in TwiddlerLayout::MAIN[0] {
-                // Uses a different color to prevent confusion
+                // uses a different color to prevent confusion
                 if_chord_contains(f, key, "🔴", "⚪")?;
             }
             writeln!(f)?;
         }
 
         for row in TwiddlerLayout::MAIN[1..].iter() {
-            write!(f, " ")?;  // The thumb has one more key than the rows
+            write!(f, " ")?;  // the thumb has one more key than the rows
             for key in row {
                 if_chord_contains(f, *key, "⚫", "⚪")?;
             }

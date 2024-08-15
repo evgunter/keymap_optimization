@@ -7,19 +7,20 @@ use rand::Rng;
 use strum::{EnumCount, VariantArray};
 
 fn make_demo_trial<R: Rng> (rng: &mut R, threshold: f64, impossible_threshold: f64) -> TrialData<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout> {
-    let n_repetitions_per_trial = rng.gen_range(1..10);  // This will actually be fixed in practice, but doesn't hurt to vary it here
-    // some of the time, get a random duration uniformly sampled between 0.0 and 100.0; some of the time, use ErrCode::Impossible
-    let time_elapsed: Result<f64, ErrCode> = {
+    let n_repetitions_per_trial = rng.gen_range(1..10);  // this will actually be fixed in practice, but doesn't hurt to vary it here
+    // sometimes get a random duration uniformly sampled between 0.0 and 100.0 and a random accuracy uniformly sampled between 0.0 and 1.0;
+    // sometimes use ErrCode::Impossible
+    let trial_performance: Result<(f64, f64), ErrCode> = {
         if rng.gen::<f64>() < impossible_threshold {
             Err(ErrCode::Impossible)
         } else {
-            Ok(100.0 * rng.gen::<f64>())
+            Ok((100.0 * rng.gen::<f64>(), rng.gen::<f64>()))
         }
     };
     TrialData {
         chord_pair: [random_chord(rng, threshold), random_chord(rng, threshold)],
         n_repetitions: n_repetitions_per_trial,
-        time: time_elapsed,
+        performance: trial_performance,
     }
 }
 
@@ -39,12 +40,16 @@ fn make_demo_data_default() -> TrialResults<TwiddlerKey, { TwiddlerKey::COUNT },
     make_demo_data(&mut rng, n_trials, THRESHOLD, IMPOSSIBLE_THRESHOLD)
 }
 
+fn get_tmp_results_path(unique_id: &str) -> String {
+    // it's important to have the files have different names--tests are run concurrently!
+    // unique_id should generally just be the name of the function, unless multiple files are used in the same function.
+    format!("/tmp/chord_preferences_results_{}_{}.json", unique_id, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs())
+}
+
 #[test]
 fn serialization_round_trip_success() {
-    // Write some demo results to file, then load them from file and verify that they are identical.
-    const RESULTS_PATH: &str = "/tmp";
-    // note that it's important to have the files have different names--tests are run concurrently!
-    let results_path = format!("{}/chord_preferences_results_success_{}.json", RESULTS_PATH, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+    // write some demo results to file, then load them from file and verify that they are identical.
+    let results_path = get_tmp_results_path("serialization_round_trip_success");
     let demo_results = make_demo_data_default();
 
     println!("tmp file path: {}", results_path);
@@ -63,12 +68,19 @@ fn serialization_round_trip_success() {
     assert_eq!(loaded_results, demo_results)
 }
 
-#[test]
-fn serialization_round_trip_chord_edited() {
-    // Write some demo results to file, then load them from file and verify that they are identical.
-    const RESULTS_PATH: &str = "/tmp";
-    // note that it's important to have the files have different names--tests are run concurrently!
-    let results_path = format!("{}/chord_preferences_results_failure_{}.json", RESULTS_PATH, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+fn serialization_round_trip_chord_edited(unique_id: &str, edit_fn: fn(usize, &mut TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, &mut rand::prelude::ThreadRng) -> Result<(), &'static str>) {
+    // this function is used for tests which edit results and check that the results indeed are detected as different.
+    // they edit results in the following ways:
+    // (a) add a new trial at a random position;
+    // (b) remove a random trial;
+    // (c) flip a random key in a random chord;
+    // (d) change n_repetitions in a random trial
+    // (e) change performance (time or accuracy) in a random trial
+
+    // note that only (a) can be done if there are no trials. all the other tests will just report success in this case.
+    
+    // write some demo results to file, then load them from file and verify that they are identical.
+    let results_path = get_tmp_results_path(unique_id);
     let mut demo_results = make_demo_data_default();
 
     match demo_results.save(&results_path) {
@@ -76,39 +88,11 @@ fn serialization_round_trip_chord_edited() {
         Err(e) => return assert!(false, "Error saving results: {}", e)
     }
 
-    // now edit results to do one of the following:
-    // (a) add a new trial at a random position;
-    // (b) remove a random trial;
-    // (c) flip a random key in a random chord;
-    // (d) change n_repetitions in a random trial
-    // (e) change time in a random trial
     let mut rng = rand::thread_rng();
-    let val = rng.gen::<f64>();
     let idx = if demo_results.data.is_empty() { 0 } else { rng.gen_range(0..demo_results.data.len()) };
-    // if there are no trials, we can only do (a)
-    if val < 0.2 || demo_results.data.is_empty() {
-        // (a) add a new trial at a random position
-        demo_results.data.insert(idx, make_demo_trial(&mut rng, 0.8, 0.2));
-    } else if val < 0.4 {
-        // (b) remove a random trial
-        demo_results.data.remove(idx);
-    } else if val < 0.6 {
-        // (c) flip a random key in a random chord
-        let chord_idx = rng.gen_range(0..2);
-        let key_idx = rng.gen_range(0..TwiddlerKey::COUNT);
-        let chord_keys = &mut demo_results.data[idx].chord_pair[chord_idx].get_raw_keys();
-        chord_keys[key_idx] = !chord_keys[key_idx];
-    } else if val < 0.8 {
-        // (d) change n_repetitions in a random trial
-        demo_results.data[idx].n_repetitions += 1;
-    } else {
-        // (e) change time in a random trial
-        demo_results.data[idx].time = match demo_results.data[idx].time {
-            Ok(old_time) => {
-                if rng.gen::<f64>() < 0.5 { Err(ErrCode::Impossible) } else { Ok(old_time + 1.0) }
-            }
-            Err(ErrCode::Impossible) => Ok(100.0 * rng.gen::<f64>()),
-        }
+    match edit_fn(idx, &mut demo_results, &mut rng) {
+        Err(_) => return,  // the edit function can't be applied; treat this as a success
+        _ => ()
     }
 
     // now load the results and verify that they are NOT the same as our edited results
@@ -118,6 +102,106 @@ fn serialization_round_trip_chord_edited() {
     };
 
     assert!(loaded_results != demo_results)
+}
+
+#[test]
+fn serialization_round_trip_add_trial() {
+    // check that adding a new trial at a random position does cause the results to be detected as different
+    fn edit_fn(idx: usize, demo_results: &mut TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, rng: &mut rand::prelude::ThreadRng) -> Result<(), &'static str> {
+        demo_results.data.insert(idx, make_demo_trial(rng, 0.8, 0.2));
+        Ok(())
+    }
+    serialization_round_trip_chord_edited("serialization_round_trip_add_trial", edit_fn);
+}
+
+#[test]
+fn serialization_round_trip_remove_trial() {
+    // check that removing a random trial does cause the results to be detected as different
+    fn edit_fn(idx: usize, demo_results: &mut TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, _rng: &mut rand::prelude::ThreadRng) -> Result<(), &'static str> {
+        if demo_results.data.is_empty() {
+            return Err("no trials");
+        }
+        demo_results.data.remove(idx);
+        Ok(())
+    }
+    serialization_round_trip_chord_edited("serialization_round_trip_remove_trial", edit_fn);
+}
+
+#[test]
+fn serialization_round_trip_flip_key() {
+    // check that flipping a random key in a random chord does cause the results to be detected as different
+    fn edit_fn(idx: usize, demo_results: &mut TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, rng: &mut rand::prelude::ThreadRng) -> Result<(), &'static str> {
+        if demo_results.data.is_empty() {
+            return Err("no trials");
+        }
+        let chord_idx = rng.gen_range(0..2);
+        let key_idx = rng.gen_range(0..TwiddlerKey::COUNT);
+        let chord_keys = &mut demo_results.data[idx].chord_pair[chord_idx].get_raw_keys();
+        chord_keys[key_idx] = !chord_keys[key_idx];
+        Ok(())
+    }
+    serialization_round_trip_chord_edited("serialization_round_trip_flip_key", edit_fn);
+}
+
+#[test]
+fn serialization_round_trip_change_repetitions() {
+    // check that changing n_repetitions in a random trial does cause the results to be detected as different
+    fn edit_fn(idx: usize, demo_results: &mut TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, _rng: &mut rand::prelude::ThreadRng) -> Result<(), &'static str> {
+        if demo_results.data.is_empty() {
+            return Err("no trials");
+        }
+        demo_results.data[idx].n_repetitions += 1;
+        Ok(())
+    }
+    serialization_round_trip_chord_edited("serialization_round_trip_change_repetitions", edit_fn);
+}
+
+#[test]
+fn serialization_round_trip_toggle_performance_error() {
+    // check that switching performance between an error and a result does cause the results to be detected as different
+    fn edit_fn(idx: usize, demo_results: &mut TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, rng: &mut rand::prelude::ThreadRng) -> Result<(), &'static str> {
+        if demo_results.data.is_empty() {
+            return Err("no trials");
+        }
+        demo_results.data[idx].performance = match demo_results.data[idx].performance {
+            Ok(_) => Err(ErrCode::Impossible),
+            Err(ErrCode::Impossible) => Ok((100.0 * rng.gen::<f64>(), rng.gen::<f64>())),
+        };
+        Ok(())
+    }
+    serialization_round_trip_chord_edited("serialization_round_trip_toggle_performance_error", edit_fn);
+}
+
+#[test]
+fn serialization_round_trip_change_time() {
+    // check that changing time in a random trial does cause the results to be detected as different
+    fn edit_fn(idx: usize, demo_results: &mut TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, rng: &mut rand::prelude::ThreadRng) -> Result<(), &'static str> {
+        if demo_results.data.is_empty() {
+            return Err("no trials");
+        }
+        demo_results.data[idx].performance = match demo_results.data[idx].performance {
+            Ok((old_time, old_accuracy)) => Ok((old_time + 1.0, old_accuracy)),
+            Err(ErrCode::Impossible) => Ok((100.0 * rng.gen::<f64>(), rng.gen::<f64>())),
+        };
+        Ok(())
+    }
+    serialization_round_trip_chord_edited("serialization_round_trip_change_time", edit_fn);
+}
+
+#[test]
+fn serialization_round_trip_change_accuracy() {
+    // check that changing accuracy in a random trial does cause the results to be detected as different
+    fn edit_fn(idx: usize, demo_results: &mut TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, rng: &mut rand::prelude::ThreadRng) -> Result<(), &'static str> {
+        if demo_results.data.is_empty() {
+            return Err("no trials");
+        }
+        demo_results.data[idx].performance = match demo_results.data[idx].performance {
+            Ok((old_time, old_accuracy)) => Ok((old_time, if old_accuracy == 0.5 { 0.0 } else { 1.0 - old_accuracy })),
+            Err(ErrCode::Impossible) => Ok((100.0 * rng.gen::<f64>(), rng.gen::<f64>())),
+        };
+        Ok(())
+    }
+    serialization_round_trip_chord_edited("serialization_round_trip_change_accuracy", edit_fn);
 }
 
 
