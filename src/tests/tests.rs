@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use crate::keyboard_config::Chord;
-use crate::twiddler::{TwiddlerLayout, TwiddlerKey};
+use crate::twiddler::{TwiddlerLayout, TwiddlerKey, Node, USB_HID_COUNT};
 use crate::chord_preferences::logic::{TrialResults, TrialData, random_chord, ErrCode};
 use rand::Rng;
 use strum::{EnumCount, VariantArray};
@@ -219,4 +219,16 @@ where {
     println!("Empty chord: {}", empty_chord);
     println!("Full chord: {}", full_chord);
     println!("Regular chord: {}", regular_chord);
+}
+
+#[test]
+fn index_usb_hid_conversion() {
+    // check that the conversion functions are inverses of each other
+    for i in 0..USB_HID_COUNT {
+        println!("i: {}", i);  // TODO remove
+        let (shifted, usb) = Node::idx_to_usb(i).unwrap();
+        println!("shifted: {}, usb: {}", shifted, usb);  // TODO remove
+        let idx = Node::usb_to_idx(shifted, usb).unwrap();
+        assert_eq!(i, idx);
+    }
 }

@@ -10,3 +10,6 @@ rand = "0.8"
 serde = { version = "1.0", features = ["derive"] } 
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 serde_arrays = "0.1"
+twidlk_rust = { git = "https://github.com/evgunter/twidlk_rust" }
+serde-big-array = "0.5.1"
+queues = "1.0.2"

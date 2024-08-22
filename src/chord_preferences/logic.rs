@@ -1,11 +1,15 @@
 use rand::Rng;
-use crate::keyboard_config::{Key, Chord, Layout};
 use rand::distributions::{Distribution, Standard};
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use std::{array, vec};
 use std::collections::HashMap;
 
+use crate::keyboard_config::{Key, Chord, Layout};
+use crate::local_env::RESULTS_PATH;
+
 const N_REPETITIONS_PER_TRIAL: usize = 5;
+
+pub const CHORD_KEY_SAMPLE_THRESHOLD: f64 = 0.8;
 
 #[derive(PartialEq, Debug)]
 #[derive(Serialize, Deserialize)]
@@ -233,11 +237,10 @@ fn gather_data<K: Key, const N: usize, L: Layout<K, N>>() -> Result<TrialResults
     println!("you will be shown two chords. after some time to practice, you will need to type this pair of chords {} times, as quickly as possible.", N_REPETITIONS_PER_TRIAL);
     
     let mut results: TrialResults<K, N, L> = TrialResults::new();
-    const THRESHOLD: f64 = 0.8;
 
     // run trials until the user quits
     loop {
-        let chords = [random_chord(&mut rng, THRESHOLD), random_chord(&mut rng, THRESHOLD)];
+        let chords = [random_chord(&mut rng, CHORD_KEY_SAMPLE_THRESHOLD), random_chord(&mut rng, CHORD_KEY_SAMPLE_THRESHOLD)];
         for chord in &chords {
             println!("{}", chord);
         }
@@ -296,4 +299,18 @@ pub fn gather_and_save_data<K: Key, const N: usize, L: Layout<K, N>>(filename: &
     let results = gather_data::<K, N, L>()?;
     results.save(filename)?;
     Ok(results)
+}
+
+pub fn run<K: Key, const N: usize, L: Layout<K, N>>() where Standard: Distribution<K> {
+    let results_path = format!("{}/chord_preferences_results_{}.json",
+                                       RESULTS_PATH,
+                                       std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+
+    match gather_and_save_data::<K, N, L>(&results_path) {
+        Ok(gather_results) => gather_results,
+        Err(e) => {
+            eprintln!("Error gathering or saving data: {}", e);
+            return;
+        }
+    };
 }

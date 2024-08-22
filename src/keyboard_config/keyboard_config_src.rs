@@ -2,6 +2,7 @@ use core::fmt;
 use rand::distributions::{Distribution, Standard};
 use strum::{EnumCount, VariantArray};
 use std::marker::PhantomData;
+use std::error::Error;
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 
 // this file contains definitions of the traits that need to be instantiated by a keyboard config, and the associated generic data structures.
@@ -65,4 +66,11 @@ impl<K: Key, const N: usize, L: Layout<K, N>> fmt::Display for Chord<K, N, L> wh
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         L::fmt_chord(&self, f)
     }
+}
+
+pub trait ConfigWriterChordDecoder<K: Key, const N: usize, L: Layout<K, N>>: Sized + Serialize + DeserializeOwned where Standard: Distribution<K> {
+    fn new() -> Self;
+    fn chords_to_config(chords: Vec<(Chord<K, N, L>, String)>) -> Result<String, Box<dyn Error>>;
+    fn get_ok_strings(&self) -> &Vec<String>;
+    fn parse_trial_string(&self, test_string: &str) -> Result<Vec<String>, Box<dyn Error>>;
 }
