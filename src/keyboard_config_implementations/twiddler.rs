@@ -1,13 +1,14 @@
-use crate::keyboard_config::{Chord, Layout, Key, ConfigWriterChordDecoder};
+use crate::keyboard_config::{Chord, Layout, Key, ChordTrialUtils};
 use rand::distributions::{Distribution, Standard};
 use strum::{EnumCount, VariantArray};
 use std::fmt;
+use std::fmt::Display;
 use std::error::Error;
 use serde::{Serialize, Deserialize};
 use serde_big_array::BigArray;
 use queues::{queue, Queue, IsQueue};
 
-use twidlk_rust::{twiddler_config::{generate_bin_config, generate_text_config, text_to_usb, usb_hid_to_text, RawChord, TwiddlerConfig}, unmap_char};
+use twidlk_rust::{twiddler_config::{generate_bin_config, text_to_usb, usb_hid_to_text, sort_chords, ChordWithOutput, TwiddlerConfig}, unmap_char};
 
 // requirements for twiddler config files
 const MAX_CHORDS: u16 = 1020;
@@ -27,14 +28,14 @@ const USB_HID_RANGES: [(Usb, Usb); 3] = [
 ];
 
 macro_rules! public_for_test {
-    ($(#[$meta:meta])* const $name:ident: $type:ty = $body:tt;) => {
+    ($(#[$meta:meta])* $vis:vis const $name:ident: $type:ty = $body:expr;) => {
         #[cfg(test)]
         $(#[$meta])*
         pub(crate) const $name: $type = $body;
 
         #[cfg(not(test))]
         $(#[$meta])*
-        pub const $name: $type = $body;
+        $vis const $name: $type = $body;
     };
 
     ($(#[$meta:meta])* $vis:vis struct $name:ident $body:tt) => {
@@ -47,15 +48,26 @@ macro_rules! public_for_test {
         $vis struct $name $body
     };
 
-    ($(#[$meta:meta])* $vis:vis fn $name:ident $body:tt) => {
+    ($(#[$meta:meta])* $vis:vis fn $name:ident$(<$($($gen_arg:ident)*: $gen_trait:path),*>)?($($arg:ident: $typ:ty),*) $(-> $ret:ty)? $(where $($b:path: $d:path),*)? $body:block) => {
         #[cfg(test)]
         $(#[$meta])*
-        pub(crate) fn $name $body
+        pub(crate) fn $name$(<$($($gen_arg)*: $gen_trait),*>)?($($arg: $typ),*) $(-> $ret)? $(where $($b: $d),*)? $body
 
         #[cfg(not(test))]
         $(#[$meta])*
-        $vis fn $name $body
+        $vis fn $name$(<$($($gen_arg)*: $gen_trait),*>)?($($arg: $typ),*) $(-> $ret)? $(where $($b: $d),*)? $body
     };
+
+    ($(#[$meta:meta])* $vis:vis type $name:ident = $type:ty;) => {
+        #[cfg(test)]
+        $(#[$meta])*
+        pub(crate) type $name = $type;
+
+        #[cfg(not(test))]
+        $(#[$meta])*
+        $vis type $name = $type;
+    };
+
 }
 
 // the overall count is thisx2 because shifted differs from unshifted
@@ -64,8 +76,7 @@ const HALF_USB_HID_COUNT: u8 = USB_HID_RANGES[0].1 - USB_HID_RANGES[0].0
                              + USB_HID_RANGES[2].1 - USB_HID_RANGES[2].0;
 
 public_for_test! {
-#[allow(unused_parens)]
-const USB_HID_COUNT: u8 = (2 * HALF_USB_HID_COUNT);
+const USB_HID_COUNT: u8 = 2 * HALF_USB_HID_COUNT;
 }
                          
 
@@ -110,17 +121,19 @@ impl Distribution<TwiddlerKey> for Standard {
 }
 
 #[derive(Debug)]
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 #[derive(Serialize, Deserialize)]
 pub struct TwiddlerLayout;
 
 impl TwiddlerLayout {
+    public_for_test! {
     const THUMB: [TwiddlerKey; 4] = [
         TwiddlerKey::Z0,
         TwiddlerKey::L0,
         TwiddlerKey::M0,
         TwiddlerKey::R0,
     ];
+    }
 
     // these can't be used in chords, so i think it's not useful to include them
     // const MOUSE: [TwiddlerKey; 3] = [
@@ -129,6 +142,7 @@ impl TwiddlerLayout {
         // TwiddlerKey::RX,
     // ];
 
+    public_for_test! {
     const MAIN: [[TwiddlerKey; 3]; 4] = [
         // [TwiddlerKey::LX, TwiddlerKey::MX, TwiddlerKey::RX],  // these can't be used in chords, so i think it's not useful to include them
         [TwiddlerKey::L1, TwiddlerKey::M1, TwiddlerKey::R1],
@@ -136,10 +150,11 @@ impl TwiddlerLayout {
         [TwiddlerKey::L3, TwiddlerKey::M3, TwiddlerKey::R3],
         [TwiddlerKey::L4, TwiddlerKey::M4, TwiddlerKey::R4],
     ];
+    }
 }
 
 impl Layout<TwiddlerKey, { TwiddlerKey::COUNT }> for TwiddlerLayout {
-    fn fmt_chord(chord: &Chord<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt_chord_graphical(chord: &TwiddlerChord, f: &mut fmt::Formatter) -> fmt::Result {
         let if_chord_contains = |f: &mut fmt::Formatter, key: TwiddlerKey, symb_yes: &'static str, symb_no: &'static str| -> fmt::Result {
             if chord.contains(key) {
                 write!(f, "{}", symb_yes)
@@ -162,8 +177,49 @@ impl Layout<TwiddlerKey, { TwiddlerKey::COUNT }> for TwiddlerLayout {
         }
         writeln!(f)
     }
+    fn fmt_chord_text(chord: &Chord<TwiddlerKey, { TwiddlerKey::COUNT }, Self>, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        chord_my_format_to_twidlk(chord.clone()).fmt(f)
+    }
 }
 
+public_for_test!{
+type TwiddlerChord = Chord<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>;
+}
+
+// Z0, R0 is also reserved but isn't a valid chord anyway
+pub const RESERVED: [[TwiddlerKey; 3]; 8] = [
+    [TwiddlerKey::Z0, TwiddlerKey::R0, TwiddlerKey::R1],
+    [TwiddlerKey::Z0, TwiddlerKey::R0, TwiddlerKey::R2],
+    [TwiddlerKey::Z0, TwiddlerKey::R0, TwiddlerKey::R3],
+    [TwiddlerKey::Z0, TwiddlerKey::R0, TwiddlerKey::R4],
+    [TwiddlerKey::Z0, TwiddlerKey::R0, TwiddlerKey::M1],
+    [TwiddlerKey::Z0, TwiddlerKey::R0, TwiddlerKey::M2],
+    [TwiddlerKey::Z0, TwiddlerKey::R0, TwiddlerKey::M3],
+    [TwiddlerKey::Z0, TwiddlerKey::R0, TwiddlerKey::M4],
+];
+
+impl TwiddlerChord {
+    pub fn is_valid(&self) -> bool {
+        // a chord is valid if it contains at least one non-thumb key and is not a reserved chord
+        // (for at least some of the "reserved" chords, you actually can overwrite it and it works.
+        // but they're not terribly useful chords anyway (all requiring both num and shift) so i'll just skip them)
+
+        if !TwiddlerLayout::MAIN.concat().into_iter().any(|k| self.contains(k)) {
+            false
+        } else {
+            for reserved_chord in RESERVED {
+                let mut chord = TwiddlerChord::new();
+                for key in reserved_chord {
+                    chord.add_key(key);
+                }
+                if chord == *self {
+                    return false;
+                }
+            }
+            true
+        }
+    }
+}
 
 // === utilities for writing twiddler config files ===
 
@@ -189,7 +245,7 @@ fn empty_config() -> TwiddlerConfig {
     }    
 }
 
-fn chord_my_format_to_twidlk(my_format_chord: Chord<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>) -> Vec<u16> {
+fn chord_my_format_to_twidlk(my_format_chord: TwiddlerChord) -> twidlk_rust::Chord {
     let twidlk_key_to_my_format_key: Vec<(TwiddlerKey, u16)> = vec![
         (TwiddlerKey::Z0, 0),
         (TwiddlerKey::L0, 4),
@@ -209,10 +265,12 @@ fn chord_my_format_to_twidlk(my_format_chord: Chord<TwiddlerKey, { TwiddlerKey::
         (TwiddlerKey::R4, 15),
     ];
 
-    let twidlk_chord: Vec<u16> = twidlk_key_to_my_format_key.iter()
-        .filter(|(my_key, _)| my_format_chord.contains(*my_key))
-        .map(|(_, twidlk_key)| *twidlk_key)
-        .collect();
+    let twidlk_chord = twidlk_rust::Chord {
+        keys: twidlk_key_to_my_format_key.iter()
+              .filter(|(my_key, _)| my_format_chord.contains(*my_key))
+              .map(|(_, twidlk_key)| *twidlk_key)
+              .collect()
+    };
     twidlk_chord
 }
 
@@ -303,7 +361,10 @@ impl Node {
             }
             Some(last) => {
                 match &self.children {
-                    None => Ok(()),
+                    None => {
+                        value.push(last);  // put last back, since it wasn't part of this word
+                        Ok(())
+                    },
                     Some(children) => {
                         out.push(last);
                         children.contents[last as usize].read_last_word_(out, value)
@@ -322,14 +383,14 @@ impl Node {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct TwiddlerConfigWriterChordDecoder {
-    ok_strings: Vec<String>,
+pub struct TwiddlerChordTrialUtils {
+    vocab: Vec<(TwiddlerChord, String)>,
     code_tree: Node,
 }
 
-impl TwiddlerConfigWriterChordDecoder {
-    // this should only be called once: during initialization. after that, the fields ok_strings and code_tree field should be referenced.
-    fn get_code() -> (Node, Vec<String>) {
+impl TwiddlerChordTrialUtils {
+    // this should only be called once: during initialization. after that, the fields vocab and code_tree field should be referenced.
+    fn get_code() -> (Node, Vec<(TwiddlerChord, String)>) {
         // make a binary tree so we can uniquely decode sequences of chord strings into chords
         // there can be at most MAX_MULTICHAR_CHORDS strings with multiple characters,
         // and at most MAX_CHORDS strings overall.
@@ -386,56 +447,90 @@ impl TwiddlerConfigWriterChordDecoder {
             vec
         }
 
-        // this unwrap is safe if the code is correct, because the values of i that are converted to usb do not depend on any input
+        // now the queue contains a valid set of strings
+        // we match each string with a random chord
+        let rng = &mut rand::thread_rng();
+
         let ok_strings = queue_to_vec(node_queue)
         .into_iter()
-        .map(|v| Node::idxs_to_string(v).unwrap())
-        .collect();
-        (root, ok_strings)
+        // this unwrap is safe if the code is correct, because the values of i that are converted to usb do not depend on any input
+        .map(|s| Node::idxs_to_string(s).unwrap())
+        .collect::<Vec<String>>();
+
+        let mut chords = Vec::new();
+        while chords.len() < ok_strings.len() {
+            let chord = random_chord(rng);
+            if !chords.contains(&chord) {
+                chords.push(chord);
+            }
+        }
+        let vocab = chords.into_iter().zip(ok_strings).collect();
+
+        (root, vocab)
     }
 
 }
 
-pub fn chord_list_to_config_object(chords: Vec<(Chord<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, String)>) -> Result<TwiddlerConfig, Box<dyn Error>> {
+pub fn chord_list_to_config_object(chords: Vec<(TwiddlerChord, String)>) -> Result<TwiddlerConfig, Box<dyn Error>> {
     // takes a list of (chord, output_string) pairs, and creates a TwiddlerConfig with the default settings and the input chords
     let mut twidlk_config = empty_config();
     for (chord, output_str) in chords {
         let twidlk_chord = chord_my_format_to_twidlk(chord);
         let twidlk_chord_output = text_to_usb(output_str)?;
-        twidlk_config.chords.push(RawChord { keys: twidlk_chord, output: twidlk_chord_output });
+        twidlk_config.chords.push(ChordWithOutput { chord: twidlk_chord, output: twidlk_chord_output });
     }
+    sort_chords(&mut twidlk_config.chords);
     Ok(twidlk_config)
 }
 
+public_for_test! {
+fn random_chord_<R: rand::Rng, K: Key, const N: usize, L: Layout<K, N>>(rng: &mut R, threshold: f64) -> Chord<K, N, L> where Standard: Distribution<K> {
+    // sample a random chord with a number of keys distributed almost exponentially with base 1/threshold
+    // (not exactly exponential because we are sampling with replacement and we always sample at least one key)
+    let mut chord = Chord::new();
+    chord.add_key(rng.gen::<K>());  // ensure that the chord contains at least one key
+    loop {
+        let val: f64 = rng.gen::<f64>();
+        if val < threshold {
+            chord.add_key(rng.gen::<K>());
+        } else {
+            break;
+        }
+    }
+    chord
+}
+}
 
-impl ConfigWriterChordDecoder<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout> for TwiddlerConfigWriterChordDecoder {
+fn random_chord<R: rand::Rng>(rng: &mut R) -> TwiddlerChord {
+    const CHORD_KEY_SAMPLE_THRESHOLD: f64 = 0.6;
+    // rejection sample until we get a valid chord (this is quite fast; most chords are valid)
+    loop {
+        let attempted_chord = random_chord_(rng, CHORD_KEY_SAMPLE_THRESHOLD);
+        if attempted_chord.is_valid() {
+            return attempted_chord;
+        }
+    }
+}
+
+impl ChordTrialUtils<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout> for TwiddlerChordTrialUtils {
     fn new() -> Self {
-        let (code_tree, ok_strings) = Self::get_code();
-        TwiddlerConfigWriterChordDecoder {
-            ok_strings,
+        let (code_tree, vocab) = Self::get_code();
+        TwiddlerChordTrialUtils {
+            vocab,
             code_tree,
         }
     }
 
-    fn get_ok_strings(&self) -> &Vec<String> {
-        &self.ok_strings
+    fn get_vocab(&self) -> &Vec<(TwiddlerChord, String)> {
+        &self.vocab
     }
 
-    fn chords_to_config(chords: Vec<(Chord<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, String)>) -> Result<String, Box<dyn Error>> {
-        let twidlk_config = chord_list_to_config_object(chords)?;
-        
-        println!("{}", generate_text_config(&twidlk_config)?.join("\n") + "\n");  // TODO remove - temporary for until i connect this to the chord typing game
-        
-        // convert bin from Vec<u8> to string
-        let bin = generate_bin_config(&twidlk_config)?;
-        let mut config_text = String::new();
-        for byte in bin {
-            config_text.push(byte as char);
-        }
-        Ok(config_text)
+    fn get_config(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        let twidlk_config = chord_list_to_config_object(self.vocab.clone())?;
+        generate_bin_config(&twidlk_config)
     }
 
-    fn parse_trial_string(&self, trial_string: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    fn parse_trial_string(&self, trial_string: &str) -> Result<Vec<TwiddlerChord>, Box<dyn Error>> {
         // convert the test string to usb hid codes, and from there to indices
         let mut trial_idxs = trial_string.chars().map(|c| {
             let (shifted, usb) = unmap_char(&c.to_string())?;
@@ -450,15 +545,22 @@ impl ConfigWriterChordDecoder<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayou
         trial_idxs.reverse();
 
         // read in words until end of trial input
-        let mut result: Vec<String> = Vec::new();
+        let mut words: Vec<String> = Vec::new();
         while trial_idxs.len() > 0 {
             let word: String = root.read_last_word(&mut trial_idxs)?
             .into_iter()
             .map(|i| Node::idx_to_usb(i).and_then(|(s, c)| Ok(usb_hid_to_text(s, c).1)))
             .collect::<Result<Vec<String>, Box<dyn Error>>>()?
             .join("");
-            result.push(word);
+            words.push(word);
         }
+
+        // now convert the words to chords
+        let result: Vec<TwiddlerChord> = match words.into_iter().map(|w| self.lookup_string(&w)).collect() {
+            None => return Err("could not find chord for word".into()),
+            Some(c) => c,
+        };
+
         Ok(result)
     }
 }

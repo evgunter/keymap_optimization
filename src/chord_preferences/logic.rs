@@ -1,15 +1,13 @@
-use rand::Rng;
 use rand::distributions::{Distribution, Standard};
+use rand::prelude::SliceRandom;
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use std::{array, vec};
 use std::collections::HashMap;
 
-use crate::keyboard_config::{Key, Chord, Layout};
+use crate::keyboard_config::{Key, Chord, Layout, ChordTrialUtils, GraphicalChord};
 use crate::local_env::RESULTS_PATH;
 
 const N_REPETITIONS_PER_TRIAL: usize = 5;
-
-pub const CHORD_KEY_SAMPLE_THRESHOLD: f64 = 0.8;
 
 #[derive(PartialEq, Debug)]
 #[derive(Serialize, Deserialize)]
@@ -23,7 +21,7 @@ pub enum ErrCode {
 pub struct TrialData<K: Key, const N: usize, L: Layout<K, N>> where Standard: Distribution<K> {
     pub chord_pair: [Chord<K, N, L>; 2],
     pub n_repetitions: usize,
-    pub performance: Result<(f64, f64), ErrCode>,  // the first element is the total time, the second is the accuracy
+    pub input: Result<Vec<Chord<K, N, L>>, ErrCode>,  // the first element is the total time, the second is the accuracy
 }
 
 #[derive(PartialEq, Debug)]
@@ -57,37 +55,41 @@ impl<K: Key, const N: usize, L: Layout<K, N>> TrialResults<K, N, L> where Standa
     }
 }
 
-pub fn random_chord<R: Rng, K: Key, const N: usize, L: Layout<K, N>>(rng: &mut R, threshold: f64) -> Chord<K, N, L> where Standard: Distribution<K> {
-    // sample a random chord with a number of keys distributed almost exponentially with base 1/threshold
-    // (not exactly exponential because we are sampling with replacement and we always sample at least one key)
-    let mut chord = Chord::new();
-    chord.add_key(rng.gen::<K>());  // ensure that the chord contains at least one key
-    loop {
-        let val: f64 = rng.gen::<f64>();
-        if val < threshold {
-            chord.add_key(rng.gen::<K>());
-        } else {
-            break;
+pub fn alignment_quality<T: PartialEq>(seq_predicted: &Vec<T>, seq_corrupted: &Vec<T>) -> (u8, u8) {
+    // returns the number of correct chords and the number of incorrect chords after alignment.
+    let (correct, incorrect, _) = align(seq_predicted, seq_corrupted);
+    (correct, incorrect)
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Direction {
+    Vert,
+    Diag,
+    Horz,
+}
+
+impl std::fmt::Display for Direction {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Direction::Vert => write!(f, "|"),
+            Direction::Diag => write!(f, "\\"),
+            Direction::Horz => write!(f, "-"),
         }
     }
-    chord
 }
 
-fn get_expected_input<K: Key, const N: usize, L: Layout<K, N>>(chords: &[Chord<K, N, L>; 2]) -> [String; 2 * N_REPETITIONS_PER_TRIAL] where Standard: Distribution<K> {
-    // get the expected output for each chord
-    let component: [String; 2] = array::from_fn(|i| {
-        K::VARIANTS
-            .iter()
-            .filter(|key| chords[i].contains(**key))
-            .map(|key| format!("{}", key))
-            .collect::<String>()
-    });
-    // then copy this expected output N_REPETITIONS_PER_TRIAL times
-    array::from_fn(|i| component[i % 2].clone())
+pub fn best_candidate(candidates: &Vec<(u8, u8, Direction)>) -> &(u8, u8, Direction) {
+    // these two unwraps are safe: the first because the total number of elements is nonzero (it must be at least 2*N_REPETITIONS_PER_TRIAL),
+    // so the partial_cmp will never fail due to zero division;
+    // the second because there is guaranteed to be at least one candidate solution.
+    candidates.iter()
+              .max_by(|(nc1, ni1, _), (nc2, ni2, _)| ((*nc1 as f64) / ((*nc1 + *ni1) as f64))
+                                                     .partial_cmp(&((*nc2 as f64) / ((*nc2 + *ni2) as f64)))
+                                                     .unwrap())
+              .unwrap()
 }
 
-fn alignment_quality(seq_predicted: Vec<String>, seq_corrupted: Vec<String>) -> (u8, u8) {
-    // returns the number of correct chords and the number of incorrect chords after alignment.
+pub fn align<T: PartialEq>(seq_predicted: &Vec<T>, seq_corrupted: &Vec<T>) -> (u8, u8, Vec<Vec<Vec<(u8, u8, Direction)>>>) {
     // currently we treat the two sequences identically, using a dynamic programming algorithm
     // similar to needleman-wunch but optimizing for the fraction of the total chords that are correct.
     // however, it may be desirable to treat the sequences asymmetrically, since we know that one of them
@@ -114,15 +116,14 @@ fn alignment_quality(seq_predicted: Vec<String>, seq_corrupted: Vec<String>) -> 
     // don't need to store the directions; but they might end up being 
     // useful, so i do store them.)
 
-    #[derive(Clone, Copy)]
-    enum Direction {
-        Vert,
-        Diag,
-        Horz,
-    }
     
     // however, we don't want the standard needleman-wunch scoring, #matches - #mismatches;
     // instead we want the fraction of chords that are correct, #matches / (#matches + #mismatches).
+    // (we also will count multiple insertions of the same chord as a single error, since this is
+    // usually caused by holding a key down incorrectly.)
+
+    const COUNT_MULTIPLE_INSERTIONS_ONCE: bool = true;
+
     // unfortunately, this breaks the property that the best solution for the
     // whole thing builds on the best solution for the first part:
     //                       ____________
@@ -157,7 +158,20 @@ fn alignment_quality(seq_predicted: Vec<String>, seq_corrupted: Vec<String>) -> 
             // of each sequence. the number of matches here is always zero, since it describes matching a
             // real element with a filler. the number of mismatches is just the number of fillers inserted.
             if i == 0 {
-                nw_matrix[i][j].push((0, j as u8, Direction::Horz));
+                if j > 1 && j < seq_corrupted.len() && COUNT_MULTIPLE_INSERTIONS_ONCE && seq_corrupted[j - 2] == seq_corrupted[j - 1] {
+                    // if the user types the same chord twice in a row, we only count this as one error
+
+                    // split off nw_matrix[0][j-1] from [0][j] so we can borrow the former immutably and the latter mutably
+                    let (nw_pre_j, nw_post_j) = nw_matrix[0].split_at_mut(j);
+
+                    // for all the options (in fact there is only one) in the previous column, we add an option to this column
+                    // with the same number of incorrect elements so the insertion is only counted once
+                    for (_, ni, _) in &nw_pre_j[j-1] {
+                        nw_post_j[0].push((0, *ni, Direction::Horz));
+                    }
+                } else {
+                    nw_matrix[i][j].push((0, j as u8, Direction::Horz));
+                }
                 // the direction at (0, 0) doesn't matter, so it's ok that we always set it to Horz
             } else if j == 0 {
                 nw_matrix[i][j].push((0, i as u8, Direction::Vert));
@@ -189,7 +203,11 @@ fn alignment_quality(seq_predicted: Vec<String>, seq_corrupted: Vec<String>) -> 
                     update_if_better(&mut candidates, (&nc, &(ni + 1), &Direction::Vert));
                 }
                 for (nc, ni, _) in &nw_matrix[i][j - 1] {
-                    update_if_better(&mut candidates, (nc, &(ni + 1), &Direction::Horz));
+                    if 1 < j && j < seq_corrupted.len() && COUNT_MULTIPLE_INSERTIONS_ONCE && seq_corrupted[j - 1] == seq_corrupted[j - 2] {
+                        update_if_better(&mut candidates, (nc, ni, &Direction::Horz));
+                    } else {
+                        update_if_better(&mut candidates, (nc, &(ni + 1), &Direction::Horz));
+                    }
                 }
                 for (nc, ni, _) in &nw_matrix[i - 1][j - 1] {
                     update_if_better(&mut candidates, (nc, &(ni + 1), &Direction::Diag));
@@ -205,44 +223,40 @@ fn alignment_quality(seq_predicted: Vec<String>, seq_corrupted: Vec<String>) -> 
     let final_candidates = &nw_matrix[seq_predicted.len()][seq_corrupted.len()];
     // these two unwraps are safe: the first because the total number of elements is nonzero (it must be at least 2*N_REPETITIONS_PER_TRIAL),
     // the second because there is guaranteed to be at least one candidate solution.
-    final_candidates.iter()
-                    .map(|(nc, ni, _)| (*nc, *ni))
-                    .max_by(|(nc1, ni1), (nc2, ni2)|
-                                      ((*nc1 as f64) / ((*nc1 + *ni1) as f64))
-                                      .partial_cmp(&((*nc2 as f64) / ((*nc2 + *ni2) as f64)))
-                                      .unwrap())
-                    .unwrap()                           
+    let (correct, incorrect, _) = best_candidate(final_candidates);
+    (*correct, *incorrect, nw_matrix)
 }
 
-fn compute_accuracy<K: Key, const N: usize, L: Layout<K, N>>(actual_input: &str, chords: &[Chord<K, N, L>; 2]) -> f64 where Standard: Distribution<K> {
-    let expected = get_expected_input(chords);
-    // we define the keymap used when doing this exercise so that all combos end with ' '.
-    // therefore, we can just split on spaces
-    let actual = actual_input.split_whitespace().map(|s| s.to_string()).collect::<Vec<String>>();
-    // now, we find the optimal "alignment" between the two sequences: the way to insert "filler" chords
+fn compute_accuracy<K: Key, const N: usize, L: Layout<K, N>>(actual_input: &Vec<Chord<K, N, L>>, expected_input: &Vec<Chord<K, N, L>>) -> f64 where Standard: Distribution<K> {
+    // we find the optimal "alignment" between the two sequences: the way to insert "filler" chords
     // in both of them so that the greatest number of chords match each other. 
     // i.e., for sequence ABABAB and BABABA, a direct comparison would give an accuracy of 0 but the optimal alignment     ABABAB
     // gives an accuracy of 5/7--after fillers are inserted, the sequence has length 7, and 5 of the chords match.         BABABA
     // (in other words, we assume that the user accidentally typed B before they attempted the sequence, and then missed the final element)
     // we don't give an ''partial credit'' if the user gets most of the keys in a chord right but messes up one or two; the result of this
     // will generally be illegible, so we want the reward model to learn to avoid chords which are difficult to type accurately.
-    let expected_vec = expected.iter().map(|s| s.to_string()).collect::<Vec<String>>();
-    let (correct, incorrect) = alignment_quality(expected_vec, actual);
+    let (correct, incorrect) = alignment_quality(expected_input, actual_input);
     (correct as f64) / ((correct + incorrect) as f64)
 }
 
-
-fn gather_data<K: Key, const N: usize, L: Layout<K, N>>() -> Result<TrialResults<K, N, L>, std::io::Error> where Standard: Distribution<K> {
-    let mut rng = rand::thread_rng();
+fn gather_data<K: Key, const N: usize, L: Layout<K, N>, C: ChordTrialUtils<K, N, L>>(chord_trial_utils: C) -> Result<TrialResults<K, N, L>, std::io::Error> where Standard: Distribution<K> {
+    let rng = &mut rand::thread_rng();
     println!("you will be shown two chords. after some time to practice, you will need to type this pair of chords {} times, as quickly as possible.", N_REPETITIONS_PER_TRIAL);
     
     let mut results: TrialResults<K, N, L> = TrialResults::new();
 
+    let chord_list: Vec<&Chord<K, N, L>> = chord_trial_utils.get_vocab()
+                                                           .into_iter()
+                                                           .map(|(chord, _)| chord)
+                                                           .collect();
+
     // run trials until the user quits
     loop {
-        let chords = [random_chord(&mut rng, CHORD_KEY_SAMPLE_THRESHOLD), random_chord(&mut rng, CHORD_KEY_SAMPLE_THRESHOLD)];
+        // the unwraps are safe because chord_list is nonempty
+        let chords: [Chord<K, N, L>; 2] = [(**chord_list.choose(rng).unwrap()).clone(),
+                                           (**chord_list.choose(rng).unwrap()).clone()];
         for chord in &chords {
-            println!("{}", chord);
+            println!("{}", GraphicalChord { chord });
         }
 
         'trial: loop {
@@ -253,9 +267,20 @@ fn gather_data<K: Key, const N: usize, L: Layout<K, N>>() -> Result<TrialResults
                 let mut trial_input = String::new();
                 let start_time = std::time::Instant::now();
                 std::io::stdin().read_line(&mut trial_input)?;
+                let parsed_chords = match chord_trial_utils.parse_trial_string(&trial_input[0..trial_input.len() - 1]) {  // remove the final newline
+                    Ok(parsed) => parsed,
+                    Err(e) => {
+                        println!("error parsing input: {}. perhaps you entered text from the wrong device?", e);
+                        continue 'trial;
+                    }
+                };
                 let trial_time = start_time.elapsed().as_secs_f64();
-                let trial_accuracy = compute_accuracy(&trial_input, &chords);
-                println!("expected input: {}; accuracy: {}; average switching time: {}", get_expected_input(&chords).join(" "), trial_accuracy, trial_time / ((2 * N_REPETITIONS_PER_TRIAL - 1) as f64));
+
+                // print accuracy and speed to the user
+                let expected_chords: [Chord<K, N, L>; 2 * N_REPETITIONS_PER_TRIAL] = array::from_fn(|i| chords[i % 2].clone());
+                let trial_accuracy = compute_accuracy::<K, N, L>(&parsed_chords, &expected_chords.to_vec());
+                let expected_input: Vec<String> = expected_chords.into_iter().map(|c| chord_trial_utils.lookup_chord(&c).unwrap()).collect();  // this unwrap is safe if the code is correct, because this chord belongs to the vocab
+                println!("expected input: {}; accuracy: {}; average switching time: {}", expected_input.join(" "), trial_accuracy, trial_time / ((2 * N_REPETITIONS_PER_TRIAL - 1) as f64));
                 println!("accept this trial (Y), or try again (N)?");
                 'accept: loop {
                     let mut accept_input = String::new();
@@ -265,7 +290,7 @@ fn gather_data<K: Key, const N: usize, L: Layout<K, N>>() -> Result<TrialResults
                         let trial_data = TrialData {
                             chord_pair: chords,
                             n_repetitions: N_REPETITIONS_PER_TRIAL,
-                            performance: Ok((trial_time, trial_accuracy)),
+                            input: Ok(parsed_chords),
                         };
                         results.push(trial_data);
                         break 'trial;
@@ -281,7 +306,7 @@ fn gather_data<K: Key, const N: usize, L: Layout<K, N>>() -> Result<TrialResults
                 let trial_data = TrialData {
                     chord_pair: chords,
                     n_repetitions: N_REPETITIONS_PER_TRIAL,
-                    performance: Err(ErrCode::Impossible),
+                    input: Err(ErrCode::Impossible),
                 };
                 results.push(trial_data);
                 break 'trial;
@@ -295,18 +320,18 @@ fn gather_data<K: Key, const N: usize, L: Layout<K, N>>() -> Result<TrialResults
     }
 }
 
-pub fn gather_and_save_data<K: Key, const N: usize, L: Layout<K, N>>(filename: &str) -> Result<TrialResults<K, N, L>, std::io::Error> where Standard: Distribution<K> {
-    let results = gather_data::<K, N, L>()?;
-    results.save(filename)?;
-    Ok(results)
-}
-
-pub fn run<K: Key, const N: usize, L: Layout<K, N>>() where Standard: Distribution<K> {
+pub fn gather_and_save_data<K: Key, const N: usize, L: Layout<K, N>, C: ChordTrialUtils<K, N, L>>(chord_trial_utils_file: &str) -> Result<TrialResults<K, N, L>, std::io::Error> where Standard: Distribution<K> {
     let results_path = format!("{}/chord_preferences_results_{}.json",
                                        RESULTS_PATH,
                                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+    let chord_trial_utils: C = serde_json::from_reader(std::fs::File::open(std::path::Path::new(chord_trial_utils_file))?)?;
+    let results = gather_data::<K, N, L, C>(chord_trial_utils)?;
+    results.save(&results_path)?;
+    Ok(results)
+}
 
-    match gather_and_save_data::<K, N, L>(&results_path) {
+pub fn run<K: Key, const N: usize, L: Layout<K, N>, C: ChordTrialUtils<K, N, L>>(chord_trial_utils_file: &str) where Standard: Distribution<K> {
+    match gather_and_save_data::<K, N, L, C>(chord_trial_utils_file) {
         Ok(gather_results) => gather_results,
         Err(e) => {
             eprintln!("Error gathering or saving data: {}", e);

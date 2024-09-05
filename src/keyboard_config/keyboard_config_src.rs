@@ -12,12 +12,13 @@ where
     Standard: Distribution<Self>
 {}
 
-pub trait Layout<K: Key, const N: usize>: Sized + Serialize + DeserializeOwned where Standard: Distribution<K> {
-    fn fmt_chord(chord: &Chord<K, N, Self>, f: &mut fmt::Formatter) -> fmt::Result;
+pub trait Layout<K: Key, const N: usize>: Sized + Serialize + DeserializeOwned + fmt::Debug + Clone + PartialEq where Standard: Distribution<K> {
+    fn fmt_chord_graphical(chord: &Chord<K, N, Self>, f: &mut fmt::Formatter) -> fmt::Result;
+    fn fmt_chord_text(chord: &Chord<K, N, Self>, f: &mut fmt::Formatter) -> fmt::Result;
 }
 
 // a combination of keys pressed simultaneously
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 #[derive(Serialize, Deserialize)]
 #[derive(Debug)]
 // N is the number of distinct keys that there are, i.e. Key::COUNT (which can't be used here since it's a generic)
@@ -62,15 +63,41 @@ impl<K: Key, const N: usize, L: Layout<K, N>> Chord<K, N, L> where Standard: Dis
     }
 }
 
-impl<K: Key, const N: usize, L: Layout<K, N>> fmt::Display for Chord<K, N, L> where Standard: Distribution<K> {
+pub struct GraphicalChord<'a, K: Key, const N: usize, L: Layout<K, N>> where Standard: Distribution<K> {
+    pub chord: &'a Chord<K, N, L>,
+}
+
+impl<'a, K: Key, const N: usize, L: Layout<K, N>> fmt::Display for GraphicalChord<'a, K, N, L> where Standard: Distribution<K> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        L::fmt_chord(&self, f)
+        L::fmt_chord_graphical(&self.chord, f)
     }
 }
 
-pub trait ConfigWriterChordDecoder<K: Key, const N: usize, L: Layout<K, N>>: Sized + Serialize + DeserializeOwned where Standard: Distribution<K> {
+impl<K: Key, const N: usize, L: Layout<K, N>> fmt::Display for Chord<K, N, L> where Standard: Distribution<K> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        L::fmt_chord_text(&self, f)
+    }
+}
+
+fn _display_chord_sequence<K: Key, const N: usize, L: Layout<K, N>>(chords: &Vec<Chord<K, N, L>>) -> String where Standard: Distribution<K> {
+    chords.into_iter().map(|c| K::VARIANTS.iter()
+                                          .filter(|key| c.contains(**key))
+                                          .map(|key| format!("{}", key))
+                                          .collect::<String>())
+                      .collect::<Vec<String>>()
+                      .join(" ")
+}
+
+pub trait ChordTrialUtils<K: Key, const N: usize, L: Layout<K, N>>: Sized + Serialize + DeserializeOwned where Standard: Distribution<K> {
     fn new() -> Self;
-    fn chords_to_config(chords: Vec<(Chord<K, N, L>, String)>) -> Result<String, Box<dyn Error>>;
-    fn get_ok_strings(&self) -> &Vec<String>;
-    fn parse_trial_string(&self, test_string: &str) -> Result<Vec<String>, Box<dyn Error>>;
+    fn get_config(&self) -> Result<Vec<u8>, Box<dyn Error>>;
+    fn get_vocab(&self) -> &Vec<(Chord<K, N, L>, String)>;
+    fn parse_trial_string(&self, test_string: &str) -> Result<Vec<Chord<K, N, L>>, Box<dyn Error>>;
+    // TODO: these are inefficient. if we ever need ok performance on this, should create and store a hashmap inside the struct
+    fn lookup_chord(&self, chord: &Chord<K, N, L>) -> Option<String> {
+        self.get_vocab().iter().find(|(c, _)| c == chord).map(|(_, s)| s.clone())
+    }
+    fn lookup_string(&self, string: &str) -> Option<Chord<K, N, L>> {
+        self.get_vocab().iter().find(|(_, s)| s == string).map(|(c, _)| c.clone())
+    }
 }
