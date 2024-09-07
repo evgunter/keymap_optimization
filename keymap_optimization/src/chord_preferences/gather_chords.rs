@@ -15,13 +15,22 @@ pub enum ErrCode {
     Impossible,
 }
 
+#[derive(Clone)]
+#[derive(PartialEq, Debug)]
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "K: DeserializeOwned, L: DeserializeOwned")]
+pub struct Performance<K: Key, const N: usize, L: Layout<K, N>> where Standard: Distribution<K> {
+    pub input: Vec<Chord<K, N, L>>,
+    pub time: f64,
+}
+
 #[derive(PartialEq, Debug)]
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "K: DeserializeOwned, L: DeserializeOwned")]
 pub struct TrialData<K: Key, const N: usize, L: Layout<K, N>> where Standard: Distribution<K> {
     pub chord_pair: [Chord<K, N, L>; 2],
     pub n_repetitions: usize,
-    pub input: Result<Vec<Chord<K, N, L>>, ErrCode>,  // the first element is the total time, the second is the accuracy
+    pub performance: Result<Performance<K, N, L>, ErrCode>,
 }
 
 #[derive(PartialEq, Debug)]
@@ -227,7 +236,7 @@ pub fn align<T: PartialEq>(seq_predicted: &Vec<T>, seq_corrupted: &Vec<T>) -> (u
     (*correct, *incorrect, nw_matrix)
 }
 
-fn compute_accuracy<K: Key, const N: usize, L: Layout<K, N>>(actual_input: &Vec<Chord<K, N, L>>, expected_input: &Vec<Chord<K, N, L>>) -> f64 where Standard: Distribution<K> {
+pub fn compute_accuracy<K: Key, const N: usize, L: Layout<K, N>>(actual_input: &Vec<Chord<K, N, L>>, expected_input: &Vec<Chord<K, N, L>>) -> f64 where Standard: Distribution<K> {
     // we find the optimal "alignment" between the two sequences: the way to insert "filler" chords
     // in both of them so that the greatest number of chords match each other. 
     // i.e., for sequence ABABAB and BABABA, a direct comparison would give an accuracy of 0 but the optimal alignment     ABABAB
@@ -237,6 +246,11 @@ fn compute_accuracy<K: Key, const N: usize, L: Layout<K, N>>(actual_input: &Vec<
     // will generally be illegible, so we want the reward model to learn to avoid chords which are difficult to type accurately.
     let (correct, incorrect) = alignment_quality(expected_input, actual_input);
     (correct as f64) / ((correct + incorrect) as f64)
+}
+
+pub fn accuracy_from_chord_pair<K: Key, const N: usize, L: Layout<K, N>>(actual_input: &Vec<Chord<K, N, L>>, chord_pair: &[Chord<K, N, L>; 2]) -> f64 where Standard: Distribution<K> {
+    let expected_input: [Chord<K, N, L>; 2 * N_REPETITIONS_PER_TRIAL] = array::from_fn(|i| chord_pair[i % 2].clone());
+    compute_accuracy::<K, N, L>(&actual_input, &expected_input.to_vec())
 }
 
 fn gather_data<K: Key, const N: usize, L: Layout<K, N>, C: ChordTrialUtils<K, N, L>>(chord_trial_utils: C) -> Result<TrialResults<K, N, L>, std::io::Error> where Standard: Distribution<K> {
@@ -290,7 +304,7 @@ fn gather_data<K: Key, const N: usize, L: Layout<K, N>, C: ChordTrialUtils<K, N,
                         let trial_data = TrialData {
                             chord_pair: chords,
                             n_repetitions: N_REPETITIONS_PER_TRIAL,
-                            input: Ok(parsed_chords),
+                            performance: Ok(Performance { input: parsed_chords, time: trial_time }),
                         };
                         results.push(trial_data);
                         break 'trial;
@@ -306,7 +320,7 @@ fn gather_data<K: Key, const N: usize, L: Layout<K, N>, C: ChordTrialUtils<K, N,
                 let trial_data = TrialData {
                     chord_pair: chords,
                     n_repetitions: N_REPETITIONS_PER_TRIAL,
-                    input: Err(ErrCode::Impossible),
+                    performance: Err(ErrCode::Impossible),
                 };
                 results.push(trial_data);
                 break 'trial;

@@ -56,6 +56,10 @@ impl<K: Key, const N: usize, L: Layout<K, N>> Chord<K, N, L> where Standard: Dis
         self.keys.iter().filter(|&&x| x).count()
     }
 
+    pub fn to_vector(&self) -> Vec<bool> {
+        self.keys.to_vec()
+    }
+
     // allow direct editing of the private field .keys in the unit tests
     #[cfg(test)]
     pub(crate) fn get_raw_keys(&mut self) -> &mut [bool] {

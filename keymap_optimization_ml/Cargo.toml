@@ -1,0 +1,13 @@
+[package]
+name = "keymap_optimization_ml"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] } 
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+strum = "0.26"
+strum_macros = "0.26"
+keymap_optimization = { path = "../keymap_optimization" }
+tch = "0.17"
