@@ -1,5 +1,4 @@
 use core::fmt;
-use rand::distributions::{Distribution, Standard};
 use strum::{EnumCount, VariantArray};
 use std::marker::PhantomData;
 use std::error::Error;
@@ -8,13 +7,14 @@ use serde::{Serialize, Deserialize, de::DeserializeOwned};
 // this file contains definitions of the traits that need to be instantiated by a keyboard config, and the associated generic data structures.
 
 pub trait Key: Sized + fmt::Display + PartialEq + Copy + EnumCount + VariantArray + fmt::Debug + Serialize + DeserializeOwned
-where
-    Standard: Distribution<Self>
-{}
+{
+    fn gen_random<R: rand::Rng>(rng: &mut R) -> Self;
+}
 
-pub trait Layout<K: Key, const N: usize>: Sized + Serialize + DeserializeOwned + fmt::Debug + Clone + PartialEq where Standard: Distribution<K> {
+pub trait Layout<K: Key, const N: usize>: Sized + Serialize + DeserializeOwned + fmt::Debug + Clone + PartialEq {
     fn fmt_chord_graphical(chord: &Chord<K, N, Self>, f: &mut fmt::Formatter) -> fmt::Result;
     fn fmt_chord_text(chord: &Chord<K, N, Self>, f: &mut fmt::Formatter) -> fmt::Result;
+    fn is_valid(chord: &Chord<K, N, Self>) -> bool;
 }
 
 // a combination of keys pressed simultaneously
@@ -22,7 +22,7 @@ pub trait Layout<K: Key, const N: usize>: Sized + Serialize + DeserializeOwned +
 #[derive(Serialize, Deserialize)]
 #[derive(Debug)]
 // N is the number of distinct keys that there are, i.e. Key::COUNT (which can't be used here since it's a generic)
-pub struct Chord<K: Key, const N: usize, L: Layout<K, N>> where Standard: Distribution<K> {
+pub struct Chord<K: Key, const N: usize, L: Layout<K, N>> {
     #[serde(with = "serde_arrays")]
     keys: [bool; N],
     #[serde(skip)]
@@ -31,7 +31,7 @@ pub struct Chord<K: Key, const N: usize, L: Layout<K, N>> where Standard: Distri
     _marker1: PhantomData<L>,
 }
 
-impl<K: Key, const N: usize, L: Layout<K, N>> Chord<K, N, L> where Standard: Distribution<K> {
+impl<K: Key, const N: usize, L: Layout<K, N>> Chord<K, N, L> {
     pub fn new() -> Self {
         Self {
             keys: [false; N],
@@ -67,23 +67,23 @@ impl<K: Key, const N: usize, L: Layout<K, N>> Chord<K, N, L> where Standard: Dis
     }
 }
 
-pub struct GraphicalChord<'a, K: Key, const N: usize, L: Layout<K, N>> where Standard: Distribution<K> {
+pub struct GraphicalChord<'a, K: Key, const N: usize, L: Layout<K, N>> {
     pub chord: &'a Chord<K, N, L>,
 }
 
-impl<'a, K: Key, const N: usize, L: Layout<K, N>> fmt::Display for GraphicalChord<'a, K, N, L> where Standard: Distribution<K> {
+impl<'a, K: Key, const N: usize, L: Layout<K, N>> fmt::Display for GraphicalChord<'a, K, N, L> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         L::fmt_chord_graphical(&self.chord, f)
     }
 }
 
-impl<K: Key, const N: usize, L: Layout<K, N>> fmt::Display for Chord<K, N, L> where Standard: Distribution<K> {
+impl<K: Key, const N: usize, L: Layout<K, N>> fmt::Display for Chord<K, N, L> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         L::fmt_chord_text(&self, f)
     }
 }
 
-fn _display_chord_sequence<K: Key, const N: usize, L: Layout<K, N>>(chords: &Vec<Chord<K, N, L>>) -> String where Standard: Distribution<K> {
+fn _display_chord_sequence<K: Key, const N: usize, L: Layout<K, N>>(chords: &Vec<Chord<K, N, L>>) -> String {
     chords.into_iter().map(|c| K::VARIANTS.iter()
                                           .filter(|key| c.contains(**key))
                                           .map(|key| format!("{}", key))
@@ -92,8 +92,13 @@ fn _display_chord_sequence<K: Key, const N: usize, L: Layout<K, N>>(chords: &Vec
                       .join(" ")
 }
 
-pub trait ChordTrialUtils<K: Key, const N: usize, L: Layout<K, N>>: Sized + Serialize + DeserializeOwned where Standard: Distribution<K> {
-    fn new() -> Self;
+pub trait ChordSampler<K: Key, const N: usize, L: Layout<K, N>, R: rand::Rng, I> where Self: Sized {
+    fn new(rng: R, info: Box<I>) -> Result<Self, Box<dyn Error>>;  // I is the initialization info
+    fn sample_chord(&mut self) -> Chord<K, N, L>;  // this need not be uniform. there may be multiple samplers for the same type of chord
+}
+
+pub trait ChordTrialUtils<K: Key, const N: usize, L: Layout<K, N>, R: rand::Rng, I, S: ChordSampler<K, N, L, R, I>>: Sized + Serialize + DeserializeOwned {
+    fn new(chord_sampler: S) -> Self;
     fn get_config(&self) -> Result<Vec<u8>, Box<dyn Error>>;
     fn get_vocab(&self) -> &Vec<(Chord<K, N, L>, String)>;
     fn parse_trial_string(&self, test_string: &str) -> Result<Vec<Chord<K, N, L>>, Box<dyn Error>>;

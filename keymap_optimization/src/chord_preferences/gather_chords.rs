@@ -1,11 +1,11 @@
-use rand::distributions::{Distribution, Standard};
 use rand::prelude::SliceRandom;
+use rand::rngs::ThreadRng;
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use std::{array, vec};
 use std::collections::HashMap;
 
-use crate::keyboard_config::{Key, Chord, Layout, ChordTrialUtils, GraphicalChord};
-use crate::local_env::RESULTS_PATH;
+use crate::keyboard_config::{Key, Chord, Layout, ChordTrialUtils, GraphicalChord, ChordSampler};
+use crate::local_env::DATA_PATH;
 
 const N_REPETITIONS_PER_TRIAL: usize = 5;
 
@@ -19,7 +19,7 @@ pub enum ErrCode {
 #[derive(PartialEq, Debug)]
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "K: DeserializeOwned, L: DeserializeOwned")]
-pub struct Performance<K: Key, const N: usize, L: Layout<K, N>> where Standard: Distribution<K> {
+pub struct Performance<K: Key, const N: usize, L: Layout<K, N>> {
     pub input: Vec<Chord<K, N, L>>,
     pub time: f64,
 }
@@ -27,7 +27,7 @@ pub struct Performance<K: Key, const N: usize, L: Layout<K, N>> where Standard: 
 #[derive(PartialEq, Debug)]
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "K: DeserializeOwned, L: DeserializeOwned")]
-pub struct TrialData<K: Key, const N: usize, L: Layout<K, N>> where Standard: Distribution<K> {
+pub struct TrialData<K: Key, const N: usize, L: Layout<K, N>> {
     pub chord_pair: [Chord<K, N, L>; 2],
     pub n_repetitions: usize,
     pub performance: Result<Performance<K, N, L>, ErrCode>,
@@ -36,11 +36,11 @@ pub struct TrialData<K: Key, const N: usize, L: Layout<K, N>> where Standard: Di
 #[derive(PartialEq, Debug)]
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "K: DeserializeOwned, L: DeserializeOwned")]
-pub struct TrialResults<K: Key, const N: usize, L: Layout<K, N>> where Standard: Distribution<K> {
+pub struct TrialResults<K: Key, const N: usize, L: Layout<K, N>> {
     pub data: Vec<TrialData<K, N, L>>,
 }
 
-impl<K: Key, const N: usize, L: Layout<K, N>> TrialResults<K, N, L> where Standard: Distribution<K> {
+impl<K: Key, const N: usize, L: Layout<K, N>> TrialResults<K, N, L> {
     pub fn new() -> Self {
         Self {
             data: Vec::new(),
@@ -236,7 +236,7 @@ pub fn align<T: PartialEq>(seq_predicted: &Vec<T>, seq_corrupted: &Vec<T>) -> (u
     (*correct, *incorrect, nw_matrix)
 }
 
-pub fn compute_accuracy<K: Key, const N: usize, L: Layout<K, N>>(actual_input: &Vec<Chord<K, N, L>>, expected_input: &Vec<Chord<K, N, L>>) -> f64 where Standard: Distribution<K> {
+pub fn compute_accuracy<K: Key, const N: usize, L: Layout<K, N>>(actual_input: &Vec<Chord<K, N, L>>, expected_input: &Vec<Chord<K, N, L>>) -> f64 {
     // we find the optimal "alignment" between the two sequences: the way to insert "filler" chords
     // in both of them so that the greatest number of chords match each other. 
     // i.e., for sequence ABABAB and BABABA, a direct comparison would give an accuracy of 0 but the optimal alignment     ABABAB
@@ -248,12 +248,12 @@ pub fn compute_accuracy<K: Key, const N: usize, L: Layout<K, N>>(actual_input: &
     (correct as f64) / ((correct + incorrect) as f64)
 }
 
-pub fn accuracy_from_chord_pair<K: Key, const N: usize, L: Layout<K, N>>(actual_input: &Vec<Chord<K, N, L>>, chord_pair: &[Chord<K, N, L>; 2]) -> f64 where Standard: Distribution<K> {
+pub fn accuracy_from_chord_pair<K: Key, const N: usize, L: Layout<K, N>>(actual_input: &Vec<Chord<K, N, L>>, chord_pair: &[Chord<K, N, L>; 2]) -> f64 {
     let expected_input: [Chord<K, N, L>; 2 * N_REPETITIONS_PER_TRIAL] = array::from_fn(|i| chord_pair[i % 2].clone());
     compute_accuracy::<K, N, L>(&actual_input, &expected_input.to_vec())
 }
 
-fn gather_data<K: Key, const N: usize, L: Layout<K, N>, C: ChordTrialUtils<K, N, L>>(chord_trial_utils: C) -> Result<TrialResults<K, N, L>, std::io::Error> where Standard: Distribution<K> {
+fn gather_data<'a, K: Key, const N: usize, L: Layout<K, N>, I, S: ChordSampler<K, N, L, ThreadRng, I>, C: ChordTrialUtils<K, N, L, ThreadRng, I, S>>(chord_trial_utils: C) -> Result<TrialResults<K, N, L>, std::io::Error> {
     let rng = &mut rand::thread_rng();
     println!("you will be shown two chords. after some time to practice, you will need to type this pair of chords {} times, as quickly as possible.", N_REPETITIONS_PER_TRIAL);
     
@@ -334,18 +334,18 @@ fn gather_data<K: Key, const N: usize, L: Layout<K, N>, C: ChordTrialUtils<K, N,
     }
 }
 
-pub fn gather_and_save_data<K: Key, const N: usize, L: Layout<K, N>, C: ChordTrialUtils<K, N, L>>(chord_trial_utils_file: &str) -> Result<TrialResults<K, N, L>, std::io::Error> where Standard: Distribution<K> {
+pub fn gather_and_save_data<'a, K: Key, const N: usize, L: Layout<K, N>, I, S: ChordSampler<K, N, L, ThreadRng, I>, C: ChordTrialUtils<K, N, L, ThreadRng, I, S>>(chord_trial_utils_file: &str) -> Result<TrialResults<K, N, L>, std::io::Error> {
     let results_path = format!("{}/chord_preferences_results_{}.json",
-                                       RESULTS_PATH,
+                                       DATA_PATH,
                                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
     let chord_trial_utils: C = serde_json::from_reader(std::fs::File::open(std::path::Path::new(chord_trial_utils_file))?)?;
-    let results = gather_data::<K, N, L, C>(chord_trial_utils)?;
+    let results = gather_data::<K, N, L, I, S, C>(chord_trial_utils)?;
     results.save(&results_path)?;
     Ok(results)
 }
 
-pub fn run<K: Key, const N: usize, L: Layout<K, N>, C: ChordTrialUtils<K, N, L>>(chord_trial_utils_file: &str) where Standard: Distribution<K> {
-    match gather_and_save_data::<K, N, L, C>(chord_trial_utils_file) {
+pub fn run<'a, K: Key, const N: usize, L: Layout<K, N>, I, S: ChordSampler<K, N, L, ThreadRng, I>, C: ChordTrialUtils<K, N, L, ThreadRng, I, S>>(chord_trial_utils_file: &str) {
+    match gather_and_save_data::<K, N, L, I, S, C>(chord_trial_utils_file) {
         Ok(gather_results) => gather_results,
         Err(e) => {
             eprintln!("Error gathering or saving data: {}", e);

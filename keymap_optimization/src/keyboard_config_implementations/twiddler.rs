@@ -1,5 +1,6 @@
-use crate::keyboard_config::{Chord, Layout, Key, ChordTrialUtils};
+use crate::keyboard_config::{Chord, ChordTrialUtils, Key, Layout, ChordSampler};
 use rand::distributions::{Distribution, Standard};
+use rand::rngs::ThreadRng;
 use strum::{EnumCount, VariantArray};
 use std::fmt;
 use std::fmt::Display;
@@ -111,7 +112,11 @@ pub enum TwiddlerKey {
     R4,  // ENT
 }
 
-impl Key for TwiddlerKey {}
+impl Key for TwiddlerKey {
+    fn gen_random<R: rand::Rng>(rng: &mut R) -> Self {
+        rng.gen::<TwiddlerKey>()
+    }
+}
 
 impl Distribution<TwiddlerKey> for Standard {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> TwiddlerKey {
@@ -153,6 +158,8 @@ impl TwiddlerLayout {
     }
 }
 
+pub type TwiddlerChord = Chord<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>;
+
 impl Layout<TwiddlerKey, { TwiddlerKey::COUNT }> for TwiddlerLayout {
     fn fmt_chord_graphical(chord: &TwiddlerChord, f: &mut fmt::Formatter) -> fmt::Result {
         let if_chord_contains = |f: &mut fmt::Formatter, key: TwiddlerKey, symb_yes: &'static str, symb_no: &'static str| -> fmt::Result {
@@ -177,13 +184,30 @@ impl Layout<TwiddlerKey, { TwiddlerKey::COUNT }> for TwiddlerLayout {
         }
         writeln!(f)
     }
-    fn fmt_chord_text(chord: &Chord<TwiddlerKey, { TwiddlerKey::COUNT }, Self>, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+    fn fmt_chord_text(chord: &TwiddlerChord, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         chord_my_format_to_twidlk(chord.clone()).fmt(f)
     }
-}
 
-public_for_test!{
-type TwiddlerChord = Chord<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>;
+    fn is_valid(chord: &TwiddlerChord) -> bool {
+        // a chord is valid if it contains at least one non-thumb key and is not a reserved chord
+        // (for at least some of the "reserved" chords, you actually can overwrite it and it works.
+        // but they're not terribly useful chords anyway (all requiring both num and shift) so i'll just skip them)
+
+        if !TwiddlerLayout::MAIN.concat().into_iter().any(|k| chord.contains(k)) {
+            false
+        } else {
+            for reserved_chord in RESERVED {
+                let mut reserved_chord_tw = TwiddlerChord::new();
+                for key in reserved_chord {
+                    reserved_chord_tw.add_key(key);
+                }
+                if reserved_chord_tw == *chord {
+                    return false;
+                }
+            }
+            true
+        }
+    }
 }
 
 // Z0, R0 is also reserved but isn't a valid chord anyway
@@ -197,29 +221,6 @@ pub const RESERVED: [[TwiddlerKey; 3]; 8] = [
     [TwiddlerKey::Z0, TwiddlerKey::R0, TwiddlerKey::M3],
     [TwiddlerKey::Z0, TwiddlerKey::R0, TwiddlerKey::M4],
 ];
-
-impl TwiddlerChord {
-    pub fn is_valid(&self) -> bool {
-        // a chord is valid if it contains at least one non-thumb key and is not a reserved chord
-        // (for at least some of the "reserved" chords, you actually can overwrite it and it works.
-        // but they're not terribly useful chords anyway (all requiring both num and shift) so i'll just skip them)
-
-        if !TwiddlerLayout::MAIN.concat().into_iter().any(|k| self.contains(k)) {
-            false
-        } else {
-            for reserved_chord in RESERVED {
-                let mut chord = TwiddlerChord::new();
-                for key in reserved_chord {
-                    chord.add_key(key);
-                }
-                if chord == *self {
-                    return false;
-                }
-            }
-            true
-        }
-    }
-}
 
 // === utilities for writing twiddler config files ===
 
@@ -389,8 +390,8 @@ pub struct TwiddlerChordTrialUtils {
 }
 
 impl TwiddlerChordTrialUtils {
-    // this should only be called once: during initialization. after that, the fields vocab and code_tree field should be referenced.
-    fn get_code() -> (Node, Vec<(TwiddlerChord, String)>) {
+    // this should only be called once: during initialization. after that, the fields vocab and code_tree should be referenced.
+    fn get_code<R: rand::Rng, I, S: ChordSampler<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, R, I>>(chord_sampler: &mut S) -> (Node, Vec<(TwiddlerChord, String)>) {
         // make a binary tree so we can uniquely decode sequences of chord strings into chords
         // there can be at most MAX_MULTICHAR_CHORDS strings with multiple characters,
         // and at most MAX_CHORDS strings overall.
@@ -448,18 +449,16 @@ impl TwiddlerChordTrialUtils {
         }
 
         // now the queue contains a valid set of strings
-        // we match each string with a random chord
-        let rng = &mut rand::thread_rng();
-
         let ok_strings = queue_to_vec(node_queue)
         .into_iter()
         // this unwrap is safe if the code is correct, because the values of i that are converted to usb do not depend on any input
         .map(|s| Node::idxs_to_string(s).unwrap())
         .collect::<Vec<String>>();
 
+        // we match each string with a chord
         let mut chords = Vec::new();
         while chords.len() < ok_strings.len() {
-            let chord = random_chord(rng);
+            let chord = chord_sampler.sample_chord();
             if !chords.contains(&chord) {
                 chords.push(chord);
             }
@@ -484,15 +483,15 @@ pub fn chord_list_to_config_object(chords: Vec<(TwiddlerChord, String)>) -> Resu
 }
 
 public_for_test! {
-fn random_chord_<R: rand::Rng, K: Key, const N: usize, L: Layout<K, N>>(rng: &mut R, threshold: f64) -> Chord<K, N, L> where Standard: Distribution<K> {
+fn random_chord_<R: rand::Rng, K: Key, const N: usize, L: Layout<K, N>>(rng: &mut R, threshold: f64) -> Chord<K, N, L> {
     // sample a random chord with a number of keys distributed almost exponentially with base 1/threshold
     // (not exactly exponential because we are sampling with replacement and we always sample at least one key)
     let mut chord = Chord::new();
-    chord.add_key(rng.gen::<K>());  // ensure that the chord contains at least one key
+    chord.add_key(K::gen_random(rng));  // ensure that the chord contains at least one key
     loop {
         let val: f64 = rng.gen::<f64>();
         if val < threshold {
-            chord.add_key(rng.gen::<K>());
+            chord.add_key(K::gen_random(rng));
         } else {
             break;
         }
@@ -501,20 +500,31 @@ fn random_chord_<R: rand::Rng, K: Key, const N: usize, L: Layout<K, N>>(rng: &mu
 }
 }
 
-fn random_chord<R: rand::Rng>(rng: &mut R) -> TwiddlerChord {
-    const CHORD_KEY_SAMPLE_THRESHOLD: f64 = 0.6;
-    // rejection sample until we get a valid chord (this is quite fast; most chords are valid)
-    loop {
-        let attempted_chord = random_chord_(rng, CHORD_KEY_SAMPLE_THRESHOLD);
-        if attempted_chord.is_valid() {
-            return attempted_chord;
+pub struct TwiddlerExponentialSampler<R: rand::Rng> {
+    rng: R
+}
+
+impl ChordSampler<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, ThreadRng, ()> for TwiddlerExponentialSampler<ThreadRng> {
+    fn new(rng: ThreadRng, _: Box<()>) -> Result<Self, Box<dyn Error>> {
+        Ok(TwiddlerExponentialSampler { rng })
+    }
+
+    fn sample_chord(&mut self) -> TwiddlerChord {
+        // sample a chord with an exponentially distributed number of keys
+        const CHORD_KEY_SAMPLE_THRESHOLD: f64 = 0.6;
+        // rejection sample until we get a valid chord (this is quite fast; most chords are valid)
+        loop {
+            let attempted_chord = random_chord_(&mut self.rng, CHORD_KEY_SAMPLE_THRESHOLD);
+            if TwiddlerLayout::is_valid(&attempted_chord) {
+                return attempted_chord;
+            }
         }
     }
 }
 
-impl ChordTrialUtils<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout> for TwiddlerChordTrialUtils {
-    fn new() -> Self {
-        let (code_tree, vocab) = Self::get_code();
+impl<I, S: ChordSampler<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, ThreadRng, I>> ChordTrialUtils<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, ThreadRng, I, S> for TwiddlerChordTrialUtils {
+    fn new(mut chord_sampler: S) -> Self {
+        let (code_tree, vocab) = Self::get_code(&mut chord_sampler);
         TwiddlerChordTrialUtils {
             vocab,
             code_tree,
@@ -556,7 +566,7 @@ impl ChordTrialUtils<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout> for Tw
         }
 
         // now convert the words to chords
-        let result: Vec<TwiddlerChord> = match words.into_iter().map(|w| self.lookup_string(&w)).collect() {
+        let result: Vec<TwiddlerChord> = match words.into_iter().map(|w| <TwiddlerChordTrialUtils as ChordTrialUtils<TwiddlerKey, 16, TwiddlerLayout, ThreadRng, I, S>>::lookup_string(self, &w)).collect() {
             None => return Err("could not find chord for word".into()),
             Some(c) => c,
         };

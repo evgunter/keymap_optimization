@@ -1,1 +1,1 @@
-pub const RESULTS_PATH: &str = "../data";
+pub const DATA_PATH: &str = "../data";

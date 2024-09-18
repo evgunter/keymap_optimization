@@ -1,11 +1,12 @@
 #![cfg(test)]
 
-use crate::keyboard_config::{Chord, ChordTrialUtils, GraphicalChord};
-use crate::twiddler::{TwiddlerLayout, TwiddlerKey, TwiddlerChord, TwiddlerChordTrialUtils, random_chord_, chord_list_to_config_object, Node, USB_HID_COUNT, RESERVED};
+use crate::keyboard_config::{Chord, ChordTrialUtils, GraphicalChord, Layout};
+use crate::twiddler::{chord_list_to_config_object, random_chord_, Node, TwiddlerChord, TwiddlerChordTrialUtils, TwiddlerExponentialSampler, TwiddlerKey, TwiddlerLayout, RESERVED, USB_HID_COUNT};
 use crate::chord_preferences::gather_chords::{TrialResults, TrialData, ErrCode, align, best_candidate, Direction, Performance};
 use crate::chord_preferences::data_collection_keymap_gen::gen_random_config_with_trial_decoder;
 use twidlk_rust::{generate_text_config, read_config};
 use rand::Rng;
+use rand::rngs::ThreadRng;
 use strum::{EnumCount, VariantArray};
 
 struct TempFile {
@@ -114,28 +115,12 @@ fn make_demo_data_default() -> TrialResults<TwiddlerKey, { TwiddlerKey::COUNT },
     make_demo_data(&mut rng, n_trials, THRESHOLD, IMPOSSIBLE_THRESHOLD)
 }
 
-// take the name of the function and replace the instance of UNIQUE_ID in the function body with the function name
-eager_macro_rules! { $eager_1
-macro_rules! make_unique_id {
-    ($(#[$meta:meta])* $vis:vis fn $name:ident$(<$($($gen_arg:ident)*: $gen_trait:path),*>)?($($arg:ident: $typ:ty),*) $(-> $ret:ty)? $(where $($b:path: $d:path),*)? $body:block) => {
-        $(#[$meta])*
-        $vis fn $name$(<$($($gen_arg)*: $gen_trait),*>)?($($arg: $typ),*) $(-> $ret)? $(where $($b: $d),*)? {
-            const UNIQUE_ID: &str = lazy!(stringify!($name));
-            $body
-        }
-    };
-}
-}
-
-lazy! {
 run_n_times! {10,
-eager! {
-make_unique_id! {
-lazy! {
 #[test]
 fn serialization_round_trip_success() {
     // write some demo results to file, then load them from file and verify that they are identical.
-    let results_path = TempFile::new(UNIQUE_ID);
+    let unique_id = &format!("test_file_{}", line!());
+    let results_path = TempFile::new(unique_id);
     let demo_results = make_demo_data_default();
 
     println!("tmp file path: {}", results_path.path);
@@ -152,10 +137,6 @@ fn serialization_round_trip_success() {
     };
 
     assert_eq!(loaded_results, demo_results)
-}
-}
-}
-}
 }
 }
 
@@ -201,10 +182,7 @@ fn serialization_round_trip_chord_edited(unique_id: &str, edit_fn: fn(usize, &mu
     }
 }
 
-lazy! {
 run_n_times! {10,
-eager! {
-make_unique_id! {
 #[test]
 fn serialization_round_trip_add_trial() {
     // check that adding a new trial at a random position does cause the results to be detected as different
@@ -212,17 +190,12 @@ fn serialization_round_trip_add_trial() {
         demo_results.data.insert(idx, make_demo_trial(rng, 0.8, 0.2));
         Ok(())
     }
-    serialization_round_trip_chord_edited(UNIQUE_ID, edit_fn);
-}
-}
-}
+    let unique_id = &format!("test_file_{}", line!());
+    serialization_round_trip_chord_edited(unique_id, edit_fn);
 }
 }
 
-lazy! {
 run_n_times! {10,
-eager! {
-make_unique_id! {
 #[test]
 fn serialization_round_trip_remove_trial() {
     // check that removing a random trial does cause the results to be detected as different
@@ -233,17 +206,12 @@ fn serialization_round_trip_remove_trial() {
         demo_results.data.remove(idx);
         Ok(())
     }
-    serialization_round_trip_chord_edited(UNIQUE_ID, edit_fn);
-}
-}
-}
+    let unique_id = &format!("test_file_{}", line!());
+    serialization_round_trip_chord_edited(unique_id, edit_fn);
 }
 }
 
-lazy! {
 run_n_times! {10,
-eager! {
-make_unique_id! {
 #[test]
 fn serialization_round_trip_flip_key() {
     // check that flipping a random key in a random chord does cause the results to be detected as different
@@ -257,17 +225,12 @@ fn serialization_round_trip_flip_key() {
         chord_keys[key_idx] = !chord_keys[key_idx];
         Ok(())
     }
-    serialization_round_trip_chord_edited(UNIQUE_ID, edit_fn);
-}
-}
-}
+    let unique_id = &format!("test_file_{}", line!());
+    serialization_round_trip_chord_edited(unique_id, edit_fn);
 }
 }
 
-lazy! {
 run_n_times! {10,
-eager! {
-make_unique_id! {
 #[test]
 fn serialization_round_trip_change_repetitions() {
     // check that changing n_repetitions in a random trial does cause the results to be detected as different
@@ -278,17 +241,12 @@ fn serialization_round_trip_change_repetitions() {
         demo_results.data[idx].n_repetitions += 1;
         Ok(())
     }
-    serialization_round_trip_chord_edited(UNIQUE_ID, edit_fn);
-}
-}
-}
+    let unique_id = &format!("test_file_{}", line!());
+    serialization_round_trip_chord_edited(unique_id, edit_fn);
 }
 }
 
-lazy! {
 run_n_times! {10,
-eager! {
-make_unique_id! {
 #[test]
 fn serialization_round_trip_toggle_input_error() {
     // check that switching input between an error and a result does cause the results to be detected as different
@@ -302,17 +260,12 @@ fn serialization_round_trip_toggle_input_error() {
         };
         Ok(())
     }
-    serialization_round_trip_chord_edited(UNIQUE_ID, edit_fn);
-}
-}
-}
+    let unique_id = &format!("test_file_{}", line!());
+    serialization_round_trip_chord_edited(unique_id, edit_fn);
 }
 }
 
-lazy! {
 run_n_times! {10,
-eager! {
-make_unique_id! {
 #[test]
 fn serialization_round_trip_change_time() {
     // check that changing time in a random trial does cause the results to be detected as different
@@ -326,18 +279,12 @@ fn serialization_round_trip_change_time() {
         };
         Ok(())
     }
-    serialization_round_trip_chord_edited(UNIQUE_ID, edit_fn);
-}
-}
-}
+    let unique_id = &format!("test_file_{}", line!());
+    serialization_round_trip_chord_edited(unique_id, edit_fn);
 }
 }
 
-lazy! {
 run_n_times! {100,
-eager! {
-make_unique_id! {
-lazy! {
 #[test]
 fn serialization_round_trip_change_input() {
     // check that changing chords in a random trial does cause the results to be detected as different
@@ -394,11 +341,8 @@ fn serialization_round_trip_change_input() {
         };
         Ok(())
     }
-    serialization_round_trip_chord_edited(UNIQUE_ID, edit_fn);
-}
-}
-}
-}
+    let unique_id = &format!("test_file_{}", line!());
+    serialization_round_trip_chord_edited(unique_id, edit_fn);
 }
 }
 
@@ -468,7 +412,7 @@ fn index_usb_hid_conversion() {
 run_n_times! {10,
 #[test]
 fn make_config_and_decoder() {
-    match gen_random_config_with_trial_decoder::<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, TwiddlerChordTrialUtils>() {
+    match gen_random_config_with_trial_decoder::<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, (), TwiddlerExponentialSampler<ThreadRng>, TwiddlerChordTrialUtils>(Box::new(())) {
         Ok(_) => (),
         Err(e) => assert!(false, "Error generating config: {}", e)
     }
@@ -478,8 +422,8 @@ fn make_config_and_decoder() {
 run_n_times! {10,
 #[test]
 fn config_round_trip() {
-    let (config_bin, chord_trial_utils) = gen_random_config_with_trial_decoder::<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, TwiddlerChordTrialUtils>().unwrap();
-    let twidlk_config = chord_list_to_config_object(chord_trial_utils.get_vocab().clone()).unwrap();
+    let (config_bin, chord_trial_utils) = gen_random_config_with_trial_decoder::<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, (), TwiddlerExponentialSampler<ThreadRng>, TwiddlerChordTrialUtils>(Box::new(())).unwrap();
+    let twidlk_config = chord_list_to_config_object(<TwiddlerChordTrialUtils as ChordTrialUtils<TwiddlerKey, 16, TwiddlerLayout, ThreadRng, (), TwiddlerExponentialSampler<ThreadRng>>>::get_vocab(&chord_trial_utils).clone()).unwrap();
     let original_text_config = generate_text_config(&twidlk_config).unwrap();
     println!("original config:\n{}", original_text_config);
 
@@ -493,7 +437,7 @@ fn config_round_trip() {
 #[test]
 fn empty_chord_is_invalid() {
     let chord: TwiddlerChord = Chord::new();
-    assert!(!chord.is_valid());
+    assert!(!TwiddlerLayout::is_valid(&chord));
 }
 
 run_n_times! {16,
@@ -506,7 +450,7 @@ fn thumb_chord_is_invalid() {
     for _ in 0..n_thumb_keys {
         chord.add_key(TwiddlerLayout::THUMB[rng.gen_range(0..TwiddlerLayout::THUMB.len())]);
     }
-    assert!(!chord.is_valid());
+    assert!(!TwiddlerLayout::is_valid(&chord));
 }
 }
 
@@ -525,7 +469,7 @@ fn reserved_to_tw() -> Vec<TwiddlerChord> {
 #[test]
 fn reserved_chords_are_invalid() {
     for reserved_chord in reserved_to_tw() {
-        assert!(!reserved_chord.is_valid());
+        assert!(!TwiddlerLayout::is_valid(&reserved_chord));
     }
 }
 
@@ -542,7 +486,7 @@ fn reserved_chords_can_be_made_valid() {
                 break;
             }
         }
-        assert!(new_chord.is_valid());
+        assert!(TwiddlerLayout::is_valid(&new_chord));
     }
 }
 
@@ -566,7 +510,7 @@ fn finger_chord_is_valid() {
             break;
         }
     }
-    assert!(chord.is_valid());
+    assert!(TwiddlerLayout::is_valid(&chord));
 }
 }
 

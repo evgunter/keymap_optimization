@@ -1,11 +1,5 @@
-use tch::nn::{Module, OptimizerConfig, Sequential, Linear};
+use tch::nn::{Module, Sequential};
 use tch::{nn, Tensor};
-use keymap_optimization::keyboard_config::{Chord, Layout, Key};
-use keymap_optimization::chord_preferences::TrialResults;
-use keymap_optimization::local_env::RESULTS_PATH;
-use keymap_optimization::chord_preferences::gather_chords::{ErrCode, accuracy_from_chord_pair};
-use rand::distributions::Standard;
-use rand::prelude::Distribution;
 
 // we learn a pair of embeddings: one for accuracy, one for time--such that the inner product of
 // the embedding of two chords represents the predicted time and accuracy for alternation between them
@@ -15,58 +9,62 @@ use rand::prelude::Distribution;
 // takes more than 0 time).
 
 // the input is a binary vector representing the keys pressed in the chord; so, its dimension is the number of keys
-const HIDDEN_DIM_SPEED: i64 = 64;
-const HIDDEN_DIM_ACCURACY: i64 = 64;
+// these are the dimensions of the embeddings
+const HIDDEN_DIM_SPEED: i64 = 3;
+const HIDDEN_DIM_ACCURACY: i64 = 3;
+const HIDDEN_DIM_POSSIBLE: i64 = 3;
 
 fn embed<const N: usize>(vs: &nn::Path, hidden_dim: i64) -> Sequential {
     // TODO: figure out how many layers to have
-    // currently, 1 input layer and 2 hidden layers
+    // currently, 1 input layer and 1 hidden layer
     nn::seq()
         .add(nn::linear(vs, N as i64, hidden_dim, Default::default()))
         .add_fn(|xs| xs.relu())
         .add(nn::linear(vs, hidden_dim, hidden_dim, Default::default()))
         .add_fn(|xs| xs.relu())
-        .add(nn::linear(vs, hidden_dim, hidden_dim, Default::default()))
-        .add_fn(|xs| xs.relu())
 }
 
-struct RewardEmbedding {
+pub struct RewardEmbedding {
     speed: Sequential,
     accuracy: Sequential,
+    is_possible: Sequential,
 }
 
 impl RewardEmbedding {
-    fn new<const N: usize>(vs: &nn::Path) -> Self {
+    pub fn new<const N: usize>(vs: &nn::Path) -> Self {
         Self {
             speed: embed::<N>(&vs.sub("speed"), HIDDEN_DIM_SPEED),
             accuracy: embed::<N>(&vs.sub("accuracy"), HIDDEN_DIM_ACCURACY),
+            is_possible: embed::<N>(&vs.sub("is_possible"), HIDDEN_DIM_POSSIBLE).add(nn::linear(vs, HIDDEN_DIM_POSSIBLE, 1, Default::default())).add_fn(|xs| xs.sigmoid()),
         }
     }
 
-    fn forward(&self, xs: &Tensor) -> Tensor {
+    pub fn forward(&self, xs: &Tensor) -> (Tensor, Tensor, Tensor) {
+        // the output tensors may not be the same chape, so they can't be combined into a single tensor
         let speed = self.speed.forward(xs);
         let accuracy = self.accuracy.forward(xs);
-        Tensor::cat(&[speed, accuracy], 1)
+        let is_possible = self.is_possible.forward(xs);
+        (speed, accuracy, is_possible)
     }
 }
 
-struct RewardModel {
-    chord_1_embedding: RewardEmbedding,
-    chord_2_embedding: RewardEmbedding,
-    final_layer: Linear,
+pub struct RewardModel {
+    pub chord_embedding: RewardEmbedding,
+    pub speed_bias: Tensor,
 }
 
-struct Dataset {
-    train_input: Tensor,
-    train_target: Tensor,
+pub struct Dataset {
+    pub train_input: Tensor,
+    pub train_target: Tensor,
+    pub test_input: Tensor,
+    pub test_target: Tensor,
 }
 
 impl RewardModel {
-    fn new<const N: usize>(vs: &nn::Path) -> Self {
+    pub fn new<const N: usize>(vs: &nn::Path) -> Self {
         Self {
-            chord_1_embedding: RewardEmbedding::new::<N>(&vs.sub("chord_1")),
-            chord_2_embedding: RewardEmbedding::new::<N>(&vs.sub("chord_2")),
-            final_layer: nn::linear(vs.sub("final"), 2 * (HIDDEN_DIM_SPEED + HIDDEN_DIM_ACCURACY), 2, Default::default()),
+            chord_embedding: RewardEmbedding::new::<N>(&vs.sub("chord_embedding")),
+            speed_bias: vs.var("speed_bias", &[1], tch::nn::Init::Const(0.0)),
         }
     }
 
@@ -75,82 +73,39 @@ impl RewardModel {
         // chords should consist of two entries
         let (chord_1, chord_2) = (&chords[0], &chords[1]);
 
-        let (emb_1, emb_2) = (self.chord_1_embedding.forward(&chord_1), self.chord_2_embedding.forward(&chord_2));
-        let emb_pair = Tensor::cat(&[emb_1, emb_2], 1);
-        emb_pair.apply(&self.final_layer)
+        let ((emb_1_s, emb_1_a, ip_1), (emb_2_s, emb_2_a, ip_2)) = (self.chord_embedding.forward(&chord_1), self.chord_embedding.forward(&chord_2));
+        // the first dimension is the batch size; so, to take the dot product of all the embeddings individually, we use sum_dim_intlist
+        let dim_sum = [-1i64];
+        let inner_product_speed = (emb_1_s * emb_2_s).sum_dim_intlist(&dim_sum[..], false, tch::Kind::Float);
+        let inner_product_accuracy = (emb_1_a * emb_2_a).sum_dim_intlist(&dim_sum[..], false, tch::Kind::Float);
+
+        // whether the combination is possible is entirely dependent on whether its constituent chords are possible
+        let is_possible = (ip_1 * ip_2).sum_dim_intlist(&dim_sum[..], false, tch::Kind::Float);
+
+        // we apply a sigmoid to the accuracy to scale it to [0, 1]
+        let accuracy: Tensor = inner_product_accuracy.sigmoid();
+        // the speed will be exp(1 - inner_product_speed) - learned_bias to scale it to (0, infinity), with learned_bias representing the value for alternation between the same chord
+        let speed: Tensor = (Tensor::ones_like(&inner_product_speed) - &inner_product_speed + &self.speed_bias).exp();
+        Tensor::stack(&[speed, accuracy, is_possible], 1)
     }
 }
 
-fn load_data<K: Key, const N: usize, L: Layout<K, N>>() -> Result<TrialResults<K, N, L>, Box<dyn std::error::Error>> where Standard: Distribution<K> {
-    // load the data from all the files chord_preferences_results*.json in RESULTS_PATH
-    let files: Vec<std::fs::DirEntry> = std::fs::read_dir(RESULTS_PATH)?
-        .filter(|f| 
-            match f {
-                Ok(f) => {
-                    let filename = f.file_name();
-                    let filename = filename.to_string_lossy();
-                    filename.starts_with("chord_preferences_results") && filename.ends_with(".json")
-                }
-                Err(_) => false,
-            })
-        .collect::<Result<Vec<std::fs::DirEntry>, std::io::Error>>()?;
-    let mut all_results = TrialResults::new();
-    for file in files {
-        let results: TrialResults<K, N, L> = serde_json::from_reader(std::fs::File::open(file.path())?)?;
-        all_results.data.extend(results.data);
-    }
-    Ok(all_results)
-}
+pub fn loss<const N: usize>(model: &RewardModel, input: &Tensor, target: &Tensor) -> Tensor {
+    // the output is part numerical (speed, accuracy) and part categorical (is_possible).
+    // so, the loss is the mean squared error of the numerical part + (a multiple of) the binary cross entropy of the categorical part
+    const XE_WEIGHT: f64 = 10.0;
+    let output = &model.forward::<N>(input);
 
-fn chord_to_tensor<K: Key, const N: usize, L: Layout<K, N>>(chord: &Chord<K, N, L>) -> Tensor where Standard: Distribution<K> {
-    Tensor::f_from_slice(&chord.to_vector().into_iter().map(|c| if c { 1.0 } else { 0.0 }).collect::<Vec<f32>>()).unwrap()
-}
-
-fn get_formatted_data<K: Key, const N: usize, L: Layout<K, N>>() -> Result<Dataset, Box<dyn std::error::Error>> where Standard: Distribution<K> {
-    let results: TrialResults<K, N, L> = load_data::<K, N, L>()?;
-    let paired: Vec<([Chord<K, N, L>; 2], [f32; 2])> = results.data.into_iter().map(|trial| {
-        match trial.performance {
-            Err(ErrCode::Impossible) => (trial.chord_pair, [0.0, 0.0]),
-            Ok(perf) => {
-                let accuracy = accuracy_from_chord_pair(&perf.input, &trial.chord_pair) as f32;
-                (trial.chord_pair, [perf.time as f32, accuracy])
-            },
-        }
-    }).collect();
-    let (input, target): (Vec<Tensor>, Vec<Tensor>) = paired.into_iter()
-                                                            .map(|(chord_pair, perf)| { Ok((Tensor::concat(&chord_pair.map(|c| chord_to_tensor(&c)), 0),
-                                                                                         Tensor::f_from_slice(&perf)?)) })
-                                                            .collect::<Result<Vec<(Tensor, Tensor)>, tch::TchError>>()?
-                                                            .into_iter()
-                                                            .unzip();
-    Ok(Dataset {
-        train_input: Tensor::stack(&input, 0),
-        train_target: Tensor::stack(&target, 0),
-    })
-}
-
-pub fn train<K: Key, const N: usize, L: Layout<K, N>>() -> Result<(), Box<dyn std::error::Error>> where Standard: Distribution<K> {
-    let vs = nn::VarStore::new(tch::Device::Cpu);
-    let model = RewardModel::new::<N>(&vs.root());
-    let mut opt = nn::Adam::default().build(&vs, 1e-3)?;
-    let data = get_formatted_data::<K, N, L>()?;
-    for epoch in 1..1000 {
-        // we can process all the data at once since it's quite small
-        let loss = model.forward::<N>(&data.train_input).mse_loss(&data.train_target, tch::Reduction::Mean);
-        opt.backward_step(&loss);
-        if epoch % 100 == 0 {
-            println!("epoch: {:4} loss: {}", epoch, loss.double_value(&[]));
+    fn split_numeric_categorical(tn: &Tensor) -> (Tensor, Tensor) {
+        match tn.split_with_sizes(&[2, 1], 1).as_slice() {
+            [numeric, categorical] => (numeric.shallow_clone(), categorical.shallow_clone()),
+            _ => panic!("tensor has the wrong number of dimensions"),
         }
     }
-    Ok(())
-}
+    let (numeric_out, categorical_out) = split_numeric_categorical(output);
+    let (numeric_target, categorical_target) = split_numeric_categorical(target);
 
-pub fn run<K: Key, const N: usize, L: Layout<K, N>>() where Standard: Distribution<K> {
-    match train::<K, N, L>() {
-        Ok(()) => (),
-        Err(e) => {
-            eprintln!("Error during training: {}", e);
-            return;
-        }
-    };
+    let mse_part = numeric_out.mse_loss(&numeric_target, tch::Reduction::Mean);
+    let bce_part = categorical_out.binary_cross_entropy_with_logits::<Tensor>(&categorical_target, None, None, tch::Reduction::Mean);
+    mse_part + XE_WEIGHT * bce_part
 }
