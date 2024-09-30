@@ -1,37 +1,72 @@
 use tch::nn::{Module, Sequential};
 use tch::{nn, Tensor};
+use itertools::multiunzip;
+use tuple::Map;
 
-// we learn a pair of embeddings: one for accuracy, one for time--such that the inner product of
-// the embedding of two chords represents the predicted time and accuracy for alternation between them
-// TODO: there will need to be some kind of scaling after the inner products to convert these into
-// actual time and accuracy scores. e.g. accuracy is between 0 and 1 (so we could use a sigmoid);
-// time could be the inner product + a learned bias (since even alternating between the same chord
-// takes more than 0 time).
+// we learn a pair of embeddings: one for accuracy, one for time--such that a function of the embeddings
+// of two chords represents the predicted time and accuracy for alternation between them
 
 // the input is a binary vector representing the keys pressed in the chord; so, its dimension is the number of keys
 // these are the dimensions of the embeddings
-const HIDDEN_DIM_SPEED: i64 = 3;
-const HIDDEN_DIM_ACCURACY: i64 = 3;
-const HIDDEN_DIM_POSSIBLE: i64 = 3;
+const HIDDEN_DIM_SPEED: i64 = 8;
+const HIDDEN_DIM_ACCURACY: i64 = 8;
+const HIDDEN_DIM_POSSIBLE: i64 = 8;
+const HIDDEN_NUM_LAYERS: i64 = 1;
+const HIDDEN_DIM_SPEED_COMBINED: i64 = 4;
+const HIDDEN_DIM_ACCURACY_COMBINED: i64 = 4;
+const HIDDEN_SPEED_COMBINED_NUM_LAYERS: i64 = 0;
+const HIDDEN_ACCURACY_COMBINED_NUM_LAYERS: i64 = 0;
+const NUM_ENSEMBLE: usize = 10;
 
-fn embed<const N: usize>(vs: &nn::Path, hidden_dim: i64) -> Sequential {
-    // TODO: figure out how many layers to have
-    // currently, 1 input layer and 1 hidden layer
-    nn::seq()
-        .add(nn::linear(vs, N as i64, hidden_dim, Default::default()))
-        .add_fn(|xs| xs.relu())
-        .add(nn::linear(vs, hidden_dim, hidden_dim, Default::default()))
-        .add_fn(|xs| xs.relu())
+fn seq_in_mid_out(vs: &nn::Path, in_dim: i64, mid_dim: i64, out_dim: i64, n_mid_layers: i64) -> Sequential {
+    // create a sequential neural network with dimensions:
+    // in_dim -> mid_dim -> mid_dim -> ... -> mid_dim -> out_dim
+    //           \__________________________________/
+    //                    n_mid_layers times
+    // where each -> includes a ReLU (note that there is no ReLU applied to the output)
+    // in particular, it has a minimum of 2 layers; the input and output layers are always distinct
+    let mut net = nn::seq()
+                     .add(nn::linear(vs, in_dim, mid_dim, Default::default()))
+                     .add_fn(|xs| xs.relu());
+    for _ in 0..n_mid_layers {
+        net = net.add(nn::linear(vs, mid_dim, mid_dim, Default::default()))
+                 .add_fn(|xs| xs.relu());
+    }
+    net.add(nn::linear(vs, mid_dim, out_dim, Default::default()))
 }
 
-pub struct RewardEmbedding {
+fn embed<const N: usize>(vs: &nn::Path, hidden_dim: i64) -> Sequential {
+    seq_in_mid_out(vs, N as i64, hidden_dim, hidden_dim, HIDDEN_NUM_LAYERS - 1)
+}
+
+pub trait RewardEmbedding: std::fmt::Debug + std::marker::Send + Sized {
+    fn new(vs: &nn::Path) -> Self;
+
+    fn tt_to_flat(tt: (Tensor, Tensor, Tensor)) -> Tensor {
+        Tensor::cat(&[&tt.0, &tt.1, &tt.2], 1)
+    }
+
+    fn flat_to_tt(flat: Tensor) -> (Tensor, Tensor, Tensor) {
+        let split = flat.split_with_sizes(&[HIDDEN_DIM_SPEED, HIDDEN_DIM_ACCURACY, 1], 1);
+        (split[0].shallow_clone(), split[1].shallow_clone(), split[2].shallow_clone())
+    }
+
+    fn embed_chords(&self, chords: &Tensor) -> (Tensor, Tensor, Tensor);
+
+    fn forward(&self, xs: &Tensor) -> Tensor {
+        Self::tt_to_flat(self.embed_chords(xs))
+    }
+}
+
+#[derive(Debug)]
+pub struct RewardEmbeddingBase<const N: usize> {
     speed: Sequential,
     accuracy: Sequential,
     is_possible: Sequential,
 }
 
-impl RewardEmbedding {
-    pub fn new<const N: usize>(vs: &nn::Path) -> Self {
+impl<const N: usize> RewardEmbedding for RewardEmbeddingBase<N> {
+    fn new(vs: &nn::Path) -> Self {
         Self {
             speed: embed::<N>(&vs.sub("speed"), HIDDEN_DIM_SPEED),
             accuracy: embed::<N>(&vs.sub("accuracy"), HIDDEN_DIM_ACCURACY),
@@ -39,18 +74,20 @@ impl RewardEmbedding {
         }
     }
 
-    pub fn forward(&self, xs: &Tensor) -> (Tensor, Tensor, Tensor) {
-        // the output tensors may not be the same chape, so they can't be combined into a single tensor
-        let speed = self.speed.forward(xs);
-        let accuracy = self.accuracy.forward(xs);
-        let is_possible = self.is_possible.forward(xs);
+    fn embed_chords(&self, chords: &Tensor) -> (Tensor, Tensor, Tensor) {
+        // the output tensors may not be the same shape
+        let speed = self.speed.forward(chords);
+        let accuracy = self.accuracy.forward(chords);
+        let is_possible = self.is_possible.forward(chords);
         (speed, accuracy, is_possible)
     }
 }
 
-pub struct RewardModel {
-    pub chord_embedding: RewardEmbedding,
-    pub speed_bias: Tensor,
+#[derive(Debug)]
+pub struct RewardModel<const N: usize, E: RewardEmbedding> {
+    pub chord_embedding: E,
+    pub speed_combiner: Sequential,
+    pub accuracy_combiner: Sequential,
 }
 
 pub struct Dataset {
@@ -60,41 +97,39 @@ pub struct Dataset {
     pub test_target: Tensor,
 }
 
-impl RewardModel {
-    pub fn new<const N: usize>(vs: &nn::Path) -> Self {
-        Self {
-            chord_embedding: RewardEmbedding::new::<N>(&vs.sub("chord_embedding")),
-            speed_bias: vs.var("speed_bias", &[1], tch::nn::Init::Const(0.0)),
-        }
-    }
-
-    fn forward<const N: usize>(&self, xs: &Tensor) -> Tensor {
+impl<const N: usize, E: RewardEmbedding> Module for RewardModel<N, E> {
+    fn forward(&self, xs: &Tensor) -> Tensor {
         let chords = xs.split_with_sizes(&[N as i64, N as i64], 1);
         // chords should consist of two entries
         let (chord_1, chord_2) = (&chords[0], &chords[1]);
 
-        let ((emb_1_s, emb_1_a, ip_1), (emb_2_s, emb_2_a, ip_2)) = (self.chord_embedding.forward(&chord_1), self.chord_embedding.forward(&chord_2));
-        // the first dimension is the batch size; so, to take the dot product of all the embeddings individually, we use sum_dim_intlist
-        let dim_sum = [-1i64];
-        let inner_product_speed = (emb_1_s * emb_2_s).sum_dim_intlist(&dim_sum[..], false, tch::Kind::Float);
-        let inner_product_accuracy = (emb_1_a * emb_2_a).sum_dim_intlist(&dim_sum[..], false, tch::Kind::Float);
+        let ((emb_1_s, emb_1_a, ip_1), (emb_2_s, emb_2_a, ip_2)) = (self.chord_embedding.embed_chords(&chord_1), self.chord_embedding.embed_chords(&chord_2));
+        let speed = self.speed_combiner.forward(&Tensor::cat(&[&emb_1_s, &emb_2_s], 1)).squeeze();
+        let accuracy = self.accuracy_combiner.forward(&Tensor::cat(&[&emb_1_a, &emb_2_a], 1)).squeeze();
 
         // whether the combination is possible is entirely dependent on whether its constituent chords are possible
+        let dim_sum = [-1i64];  // the first dimension is the batch size; so, to take the product of all the probabilities individually, we use sum_dim_intlist
         let is_possible = (ip_1 * ip_2).sum_dim_intlist(&dim_sum[..], false, tch::Kind::Float);
 
-        // we apply a sigmoid to the accuracy to scale it to [0, 1]
-        let accuracy: Tensor = inner_product_accuracy.sigmoid();
-        // the speed will be exp(1 - inner_product_speed) - learned_bias to scale it to (0, infinity), with learned_bias representing the value for alternation between the same chord
-        let speed: Tensor = (Tensor::ones_like(&inner_product_speed) - &inner_product_speed + &self.speed_bias).exp();
         Tensor::stack(&[speed, accuracy, is_possible], 1)
     }
 }
 
-pub fn loss<const N: usize>(model: &RewardModel, input: &Tensor, target: &Tensor) -> Tensor {
+impl<const N: usize, E: RewardEmbedding> RewardModel<N, E> {
+    pub fn new(vs: &nn::Path) -> Self {
+        Self {
+            chord_embedding: E::new(&vs.sub("chord_embedding")),
+            speed_combiner: seq_in_mid_out(&vs.sub("speed_combiner"), 2*HIDDEN_DIM_SPEED, HIDDEN_DIM_SPEED_COMBINED, 1, HIDDEN_SPEED_COMBINED_NUM_LAYERS).add_fn(|xs| xs.exp()),  // scale to 0, infinity with exp
+            accuracy_combiner: seq_in_mid_out(&vs.sub("accuracy_combiner"), 2*HIDDEN_DIM_ACCURACY, HIDDEN_DIM_ACCURACY_COMBINED, 1, HIDDEN_ACCURACY_COMBINED_NUM_LAYERS).add_fn(|xs| xs.sigmoid()),  // scale to 0, 1 with sigmoid
+        }
+    }
+}
+
+pub fn loss<const N: usize, E: RewardEmbedding>(model: &RewardModel<N, E>, input: &Tensor, target: &Tensor) -> Tensor {
     // the output is part numerical (speed, accuracy) and part categorical (is_possible).
     // so, the loss is the mean squared error of the numerical part + (a multiple of) the binary cross entropy of the categorical part
-    const XE_WEIGHT: f64 = 10.0;
-    let output = &model.forward::<N>(input);
+    const XE_WEIGHT: f64 = 100.0;
+    let output = &model.forward(input);
 
     fn split_numeric_categorical(tn: &Tensor) -> (Tensor, Tensor) {
         match tn.split_with_sizes(&[2, 1], 1).as_slice() {
@@ -108,4 +143,30 @@ pub fn loss<const N: usize>(model: &RewardModel, input: &Tensor, target: &Tensor
     let mse_part = numeric_out.mse_loss(&numeric_target, tch::Reduction::Mean);
     let bce_part = categorical_out.binary_cross_entropy_with_logits::<Tensor>(&categorical_target, None, None, tch::Reduction::Mean);
     mse_part + XE_WEIGHT * bce_part
+}
+
+#[derive(Debug)]
+pub struct Ensemble<M: Module> {
+    models: Vec<Box<M>>,
+}
+
+impl<M: Module> Ensemble<M> {
+    pub fn from_submodels(models: Vec<Box<M>>) -> Self {
+        Self { models }
+    }
+}
+
+impl<const N: usize, E: RewardEmbedding> RewardEmbedding for Ensemble<RewardModel<N, E>> {
+    fn new(vs: &nn::Path) -> Self {
+        Self { models: (0..NUM_ENSEMBLE).map(|_| Box::new(RewardModel::<N, E>::new(vs))).collect() }
+    }
+
+    fn embed_chords(&self, chords: &Tensor) -> (Tensor, Tensor, Tensor) {
+        let embeddings = self.models.iter().map(|m| m.chord_embedding.embed_chords(chords)).collect::<Vec<(Tensor, Tensor, Tensor)>>();
+        multiunzip::<(Vec<Tensor>, Vec<Tensor>, Vec<Tensor>), Vec<(Tensor, Tensor, Tensor)>>(embeddings).map(|ts| Tensor::stack(&ts, 0).mean_dim(0, false, tch::Kind::Float))
+    }
+}
+
+impl<const N: usize, E: RewardEmbedding> RewardModel<N, Ensemble<RewardModel<N, E>>> {
+
 }

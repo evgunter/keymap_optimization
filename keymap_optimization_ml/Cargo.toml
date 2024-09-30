@@ -3,6 +3,18 @@ name = "keymap_optimization_ml"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["sampler-uncertain", "model-single"]
+
+# sampler types for the chord sampler
+sampler-exponential = []  # sample chords using the exponential sampler (repeatedly sample a random key to add to the chord with probability 0.6 or stop adding keys and return the chord with probability 0.4. restricted to valid chords)
+sampler-possible = []  # rejection sample chords chosen uniformly at random from the set of valid cords, where the acceptance probability is the estimated probability that the chord is possible
+sampler-uncertain = []  # sort all n chords by the estimated probability that they are possible; find the index i of the first chord where the probability is greater than 0.5, then sample chords by their index according to a binomial distribution with p = i/n
+
+# model types for the chord sampler, when the possible or uncertain samplers are used
+model-single = []  # use a single model to estimate the probability that a chord is possible
+model-ensemble = []  # use an ensemble of NUM_ENSEMBLE models (as defined in reward_model.rs) to estimate the probability that a chord is possible
+
 [dependencies]
 tch = "0.17"
 rand = "0.8"
@@ -11,4 +23,5 @@ serde_json = { version = "1.0", features = ["float_roundtrip"] }
 strum = "0.26"
 strum_macros = "0.26"
 itertools = "0.13"
+tuple = "0"
 keymap_optimization = { path = "../keymap_optimization" }

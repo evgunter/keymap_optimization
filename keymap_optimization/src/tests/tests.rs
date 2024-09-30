@@ -412,7 +412,7 @@ fn index_usb_hid_conversion() {
 run_n_times! {10,
 #[test]
 fn make_config_and_decoder() {
-    match gen_random_config_with_trial_decoder::<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, (), TwiddlerExponentialSampler<ThreadRng>, TwiddlerChordTrialUtils>(Box::new(())) {
+    match gen_random_config_with_trial_decoder::<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, (), TwiddlerExponentialSampler<ThreadRng>, TwiddlerChordTrialUtils>(&()) {
         Ok(_) => (),
         Err(e) => assert!(false, "Error generating config: {}", e)
     }
@@ -422,7 +422,7 @@ fn make_config_and_decoder() {
 run_n_times! {10,
 #[test]
 fn config_round_trip() {
-    let (config_bin, chord_trial_utils) = gen_random_config_with_trial_decoder::<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, (), TwiddlerExponentialSampler<ThreadRng>, TwiddlerChordTrialUtils>(Box::new(())).unwrap();
+    let (config_bin, chord_trial_utils) = gen_random_config_with_trial_decoder::<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, (), TwiddlerExponentialSampler<ThreadRng>, TwiddlerChordTrialUtils>(&()).unwrap();
     let twidlk_config = chord_list_to_config_object(<TwiddlerChordTrialUtils as ChordTrialUtils<TwiddlerKey, 16, TwiddlerLayout, ThreadRng, (), TwiddlerExponentialSampler<ThreadRng>>>::get_vocab(&chord_trial_utils).clone()).unwrap();
     let original_text_config = generate_text_config(&twidlk_config).unwrap();
     println!("original config:\n{}", original_text_config);

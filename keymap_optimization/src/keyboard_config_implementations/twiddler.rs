@@ -459,6 +459,9 @@ impl TwiddlerChordTrialUtils {
         let mut chords = Vec::new();
         while chords.len() < ok_strings.len() {
             let chord = chord_sampler.sample_chord();
+            // TODO: this can be very slow if the number of chords we need is large compared to the standard deviation of the sampler.
+            // if this becomes a problem, it should be possible to make samplers which can exclude chords they've already sampled
+            // (e.g. if the sampler is choosing a random chord from the list of valid chords, we could remove the chosen chord from the list)
             if !chords.contains(&chord) {
                 chords.push(chord);
             }
@@ -505,7 +508,7 @@ pub struct TwiddlerExponentialSampler<R: rand::Rng> {
 }
 
 impl ChordSampler<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, ThreadRng, ()> for TwiddlerExponentialSampler<ThreadRng> {
-    fn new(rng: ThreadRng, _: Box<()>) -> Result<Self, Box<dyn Error>> {
+    fn new(rng: ThreadRng, _: &()) -> Result<Self, Box<dyn Error>> {
         Ok(TwiddlerExponentialSampler { rng })
     }
 

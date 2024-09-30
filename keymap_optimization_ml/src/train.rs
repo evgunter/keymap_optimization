@@ -5,7 +5,7 @@ use keymap_optimization::chord_preferences::TrialResults;
 use keymap_optimization::chord_preferences::gather_chords::{ErrCode, accuracy_from_chord_pair};
 use rand::prelude::SliceRandom;
 
-use crate::reward_model::{RewardModel, Dataset, loss};
+use crate::reward_model::{loss, Dataset, RewardEmbedding, RewardModel};
 
 const TEST_FRAC: f64 = 0.1;
 
@@ -39,10 +39,10 @@ fn get_formatted_data<K: Key, const N: usize, L: Layout<K, N>>(results_path: &st
     let results: TrialResults<K, N, L> = load_data::<K, N, L>(results_path)?;
     let paired: Vec<([Chord<K, N, L>; 2], [f32; 3])> = results.data.into_iter().map(|trial| {
         match trial.performance {
-            Err(ErrCode::Impossible) => (trial.chord_pair, [0.0, 0.0, 1.0]),
+            Err(ErrCode::Impossible) => (trial.chord_pair, [0.0, 0.0, 0.0]),
             Ok(perf) => {
                 let accuracy = accuracy_from_chord_pair(&perf.input, &trial.chord_pair) as f32;
-                (trial.chord_pair, [perf.time as f32, accuracy, 0.0])
+                (trial.chord_pair, [perf.time as f32, accuracy, 1.0])
             },
         }
     }).collect();
@@ -86,25 +86,25 @@ fn get_formatted_data<K: Key, const N: usize, L: Layout<K, N>>(results_path: &st
 }
 
 
-pub fn train<K: Key, const N: usize, L: Layout<K, N>>(results_path: &str) -> Result<RewardModel, Box<dyn std::error::Error>> {
+pub fn train<K: Key, const N: usize, L: Layout<K, N>, E: RewardEmbedding>(results_path: &str, n_epochs: usize) -> Result<Box<RewardModel<N, E>>, Box<dyn std::error::Error>> {
     let vs = nn::VarStore::new(tch::Device::Cpu);
-    let model = RewardModel::new::<N>(&vs.root());
+    let model = Box::new(RewardModel::<N, E>::new(&vs.root()));
     let mut opt = nn::Adam::default().build(&vs, 1e-3)?;
     let data = get_formatted_data::<K, N, L>(results_path)?;
-    for epoch in 0..1001 {
+    for epoch in 0..n_epochs {
         // we can process all the data at once since it's quite small
-        let train_loss = loss::<N>(&model, &data.train_input, &data.train_target);
+        let train_loss = loss::<N, E>(&model, &data.train_input, &data.train_target);
         opt.backward_step(&train_loss);
         if epoch % 100 == 0 {
-            let test_loss = loss::<N>(&model, &data.test_input, &data.test_target);
+            let test_loss = loss::<N, E>(&model, &data.test_input, &data.test_target);
             println!("epoch: {:<5} train loss: {:<24}, test loss: {:<24}", epoch, (train_loss.double_value(&[])) as f32, (test_loss.double_value(&[])) as f32);
         }
     }
     Ok(model)
 }
 
-pub fn run<K: Key, const N: usize, L: Layout<K, N>>(results_path: &str) {
-    match train::<K, N, L>(results_path) {
+pub fn run<K: Key, const N: usize, L: Layout<K, N>, E: RewardEmbedding>(results_path: &str) {
+    match train::<K, N, L, E>(results_path, 2001) {
         Ok(_) => (),
         Err(e) => {
             eprintln!("Error during training: {}", e);

@@ -288,6 +288,7 @@ dependencies = [
  "strum",
  "strum_macros",
  "tch",
+ "tuple",
 ]
 
 [[package]]
@@ -679,6 +680,16 @@ dependencies = [
  "cc",
  "libc",
  "zip",
+]
+
+[[package]]
+name = "tuple"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9bb9f6bd73479481158ba8ee3edf17aca93354623d13f02e96a2014fdbc1c37e"
+dependencies = [
+ "num-traits",
+ "serde",
 ]
 
 [[package]]

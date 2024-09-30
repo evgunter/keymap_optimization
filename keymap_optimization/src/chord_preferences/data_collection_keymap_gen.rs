@@ -2,14 +2,14 @@ use crate::keyboard_config::{Key, Layout, ChordTrialUtils, ChordSampler};
 use crate::local_env::DATA_PATH;
 use std::error::Error;
 
-pub fn gen_random_config_with_trial_decoder<K: Key, const N: usize, L: Layout<K,N>, I, S: ChordSampler<K, N, L, rand::rngs::ThreadRng, I>, C: ChordTrialUtils<K, N, L, rand::rngs::ThreadRng, I, S>>(initialization_info: Box<I>) -> Result<(Vec<u8>, C), Box<dyn Error>> {
+pub fn gen_random_config_with_trial_decoder<K: Key, const N: usize, L: Layout<K,N>, I, S: ChordSampler<K, N, L, rand::rngs::ThreadRng, I>, C: ChordTrialUtils<K, N, L, rand::rngs::ThreadRng, I, S>>(initialization_info: &I) -> Result<(Vec<u8>, C), Box<dyn Error>> {
     // create a legal vocabulary of chords, and a decoder for the trial output.
     // return the text of a keyboard config file and the decoder used to parse trial output
     let chord_trial_utils = C::new(S::new(rand::thread_rng(), initialization_info)?);
     Ok((chord_trial_utils.get_config()?, chord_trial_utils))
 }
 
-pub fn run<'a, K: Key, const N: usize, L: Layout<K,N>, I, S: ChordSampler<K, N, L, rand::rngs::ThreadRng, I>, C: ChordTrialUtils<K, N, L, rand::rngs::ThreadRng, I, S>>(initialization_info: Box<I>) {
+pub fn run<'a, K: Key, const N: usize, L: Layout<K,N>, I, S: ChordSampler<K, N, L, rand::rngs::ThreadRng, I>, C: ChordTrialUtils<K, N, L, rand::rngs::ThreadRng, I, S>>(initialization_info: &I) {
     let current_time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     let results_path = format!("{}/config_{}.cfg", DATA_PATH, current_time);
 

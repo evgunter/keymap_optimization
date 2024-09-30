@@ -93,7 +93,7 @@ fn _display_chord_sequence<K: Key, const N: usize, L: Layout<K, N>>(chords: &Vec
 }
 
 pub trait ChordSampler<K: Key, const N: usize, L: Layout<K, N>, R: rand::Rng, I> where Self: Sized {
-    fn new(rng: R, info: Box<I>) -> Result<Self, Box<dyn Error>>;  // I is the initialization info
+    fn new(rng: R, info: &I) -> Result<Self, Box<dyn Error>>;  // I is the initialization info
     fn sample_chord(&mut self) -> Chord<K, N, L>;  // this need not be uniform. there may be multiple samplers for the same type of chord
 }
 
