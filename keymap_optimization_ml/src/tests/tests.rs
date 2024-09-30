@@ -1,7 +1,8 @@
 #![cfg(test)]
-use keymap_optimization::keyboard_config::ChordSampler;
 use strum::EnumCount;
-use keymap_optimization::twiddler::{TwiddlerKey, TwiddlerLayout, TwiddlerChord};
+use rand::rngs::ThreadRng;
+use keymap_optimization::keyboard_config::ChordSampler;
+use keymap_optimization::twiddler::{TwiddlerKey as K, TwiddlerLayout as L, TwiddlerChord};
 use crate::chord_samplers::{get_possible_probabilities, MostUncertainPossibilityChordSampler, PossibleChordSampler};
 use crate::train::train;
 use crate::reward_model::{Ensemble, RewardEmbedding, RewardEmbeddingBase, RewardModel};
@@ -9,12 +10,12 @@ use crate::reward_model::{Ensemble, RewardEmbedding, RewardEmbeddingBase, Reward
 const TEST_RESULTS_PATH: &str = "./src/tests/test_data";
 
 fn train_and_sample<E: RewardEmbedding>(quality_ratio: f64, n_epochs: usize, data_path: &str) {
-    let model = match train::<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, E>(data_path, n_epochs) {
+    let model = match train::<K, { K::COUNT }, L, E>(data_path, n_epochs) {
         Ok(model) => model,
         Err(e) => return assert!(false, "Error training model: {}", e)
     };
 
-    let mut chords_with_probs = match get_possible_probabilities::<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, E>(&Box::new(model.chord_embedding)) {
+    let mut chords_with_probs = match get_possible_probabilities::<K, { K::COUNT }, L, E>(&Box::new(model.chord_embedding)) {
         Ok(chords_with_probs) => chords_with_probs,
         Err(e) => return assert!(false, "Error training model: {}", e)
     };
@@ -50,15 +51,15 @@ fn train_and_sample<E: RewardEmbedding>(quality_ratio: f64, n_epochs: usize, dat
 
 #[test]
 fn train_and_sample_single() {
-    train_and_sample::<RewardEmbeddingBase<{ TwiddlerKey::COUNT }>>(1.2, 1001, TEST_RESULTS_PATH);
+    train_and_sample::<RewardEmbeddingBase<{ K::COUNT }>>(1.2, 1001, TEST_RESULTS_PATH);
 }
 
 #[test]
 fn train_and_sample_ensemble() {
-    train_and_sample::<Ensemble<RewardModel<{ TwiddlerKey::COUNT }, RewardEmbeddingBase<{ TwiddlerKey::COUNT }>>>>(2.0, 501, TEST_RESULTS_PATH);
+    train_and_sample::<Ensemble<RewardModel<{ K::COUNT }, RewardEmbeddingBase<{ K::COUNT }>>>>(2.0, 501, TEST_RESULTS_PATH);
 }
 
-fn test_sampler<I, S: ChordSampler<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, rand::rngs::ThreadRng, I>>(initialization_info: &I) {
+fn test_sampler<I, S: ChordSampler<K, { K::COUNT }, L, ThreadRng, I>>(initialization_info: &I) {
     let mut sampler = match S::new(rand::thread_rng(), initialization_info) {
         Ok(s) => s,
         Err(e) => return assert!(false, "Error creating sampler: {}", e)
@@ -66,25 +67,25 @@ fn test_sampler<I, S: ChordSampler<TwiddlerKey, { TwiddlerKey::COUNT }, Twiddler
     println!();
     println!("sampled chords:");
     for _ in 0..10 {
-        let chord = <S as ChordSampler<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, rand::rngs::ThreadRng, I>>::sample_chord(&mut sampler);
+        let chord = <S as ChordSampler<K, { K::COUNT }, L, ThreadRng, I>>::sample_chord(&mut sampler);
         println!("{}", chord);
     }
 }
 
 #[test]
 fn test_exponential_sampler() {
-    test_sampler::<(), keymap_optimization::twiddler::TwiddlerExponentialSampler<rand::rngs::ThreadRng>>(&());
+    test_sampler::<(), keymap_optimization::twiddler::TwiddlerExponentialSampler<ThreadRng>>(&());
 }
 
 #[test]
 fn test_slow_samplers() {
-    type E = RewardEmbeddingBase<{ TwiddlerKey::COUNT }>;
+    type E = RewardEmbeddingBase<{ K::COUNT }>;
     // since we're just checking that nothing panics, we can train the model for a very short time since its performance doesn't matter
-    let embedder = match train::<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, E>(TEST_RESULTS_PATH, 101) {
+    let embedder = match train::<K, { K::COUNT }, L, E>(TEST_RESULTS_PATH, 101) {
         Ok(model) => Box::new(model.chord_embedding),
         Err(e) => return assert!(false, "Error training model: {}", e)
     };
 
-    test_sampler::<E, MostUncertainPossibilityChordSampler<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, rand::rngs::ThreadRng>>(&embedder);
-    test_sampler::<E, PossibleChordSampler<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, rand::rngs::ThreadRng>>(&embedder);
+    test_sampler::<E, MostUncertainPossibilityChordSampler<K, { K::COUNT }, L, ThreadRng>>(&embedder);
+    test_sampler::<E, PossibleChordSampler<K, { K::COUNT }, L, ThreadRng>>(&embedder);
 }

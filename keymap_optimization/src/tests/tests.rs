@@ -1,12 +1,11 @@
 #![cfg(test)]
 
 use crate::keyboard_config::{Chord, ChordTrialUtils, GraphicalChord, Layout};
-use crate::twiddler::{chord_list_to_config_object, random_chord_, Node, TwiddlerChord, TwiddlerChordTrialUtils, TwiddlerExponentialSampler, TwiddlerKey, TwiddlerLayout, RESERVED, USB_HID_COUNT};
+use crate::twiddler::{chord_list_to_config_object, random_chord_, Node, TwiddlerKey as K, TwiddlerChord, TwiddlerLayout as L, TwiddlerChordTrialUtils as C, TwiddlerExponentialSampler, RESERVED, USB_HID_COUNT};
 use crate::chord_preferences::gather_chords::{TrialResults, TrialData, ErrCode, align, best_candidate, Direction, Performance};
 use crate::chord_preferences::data_collection_keymap_gen::gen_random_config_with_trial_decoder;
 use twidlk_rust::{generate_text_config, read_config};
-use rand::Rng;
-use rand::rngs::ThreadRng;
+use rand::{thread_rng, Rng, rngs::ThreadRng};
 use strum::{EnumCount, VariantArray};
 
 struct TempFile {
@@ -57,7 +56,7 @@ macro_rules! run_n_times {
     };
 }
 
-fn make_demo_trial<R: Rng> (rng: &mut R, threshold: f64, impossible_threshold: f64) -> TrialData<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout> {
+fn make_demo_trial<R: Rng> (rng: &mut R, threshold: f64, impossible_threshold: f64) -> TrialData<K, { K::COUNT }, L> {
     let n_repetitions_per_trial = rng.gen_range(1..10);  // this will actually be fixed in practice, but doesn't hurt to vary it here
     // sometimes get a set of chord input randomly sampled to resemble the expected chords;
     // sometimes use ErrCode::Impossible
@@ -99,18 +98,18 @@ fn make_demo_trial<R: Rng> (rng: &mut R, threshold: f64, impossible_threshold: f
     }
 }
 
-fn make_demo_data<R: Rng>(rng: &mut R, n_trials: usize, threshold: f64, impossible_threshold: f64) -> TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout> {
-    let mut demo_results = TrialResults::<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>::new();
+fn make_demo_data<R: Rng>(rng: &mut R, n_trials: usize, threshold: f64, impossible_threshold: f64) -> TrialResults<K, { K::COUNT }, L> {
+    let mut demo_results = TrialResults::<K, { K::COUNT }, L>::new();
     for _ in 0..n_trials {
         demo_results.data.push(make_demo_trial(rng, threshold, impossible_threshold));
     }
     demo_results
 }
 
-fn make_demo_data_default() -> TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout> {
+fn make_demo_data_default() -> TrialResults<K, { K::COUNT }, L> {
     const THRESHOLD: f64 = 0.8;
     const IMPOSSIBLE_THRESHOLD: f64 = 0.2;
-    let mut rng = rand::thread_rng();
+    let mut rng = thread_rng();
     let n_trials = rng.gen_range(0..5);
     make_demo_data(&mut rng, n_trials, THRESHOLD, IMPOSSIBLE_THRESHOLD)
 }
@@ -140,7 +139,7 @@ fn serialization_round_trip_success() {
 }
 }
 
-fn serialization_round_trip_chord_edited(unique_id: &str, edit_fn: fn(usize, &mut TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, &mut rand::prelude::ThreadRng) -> Result<(), &'static str>) {
+fn serialization_round_trip_chord_edited(unique_id: &str, edit_fn: fn(usize, &mut TrialResults<K, { K::COUNT }, L>, &mut ThreadRng) -> Result<(), &'static str>) {
     // this function is used for tests which edit results and check that the results indeed are detected as different.
     // they edit results in the following ways:
     // (a) add a new trial at a random position;
@@ -160,7 +159,7 @@ fn serialization_round_trip_chord_edited(unique_id: &str, edit_fn: fn(usize, &mu
         Err(e) => return assert!(false, "Error saving results: {}", e)
     }
 
-    let mut rng = rand::thread_rng();
+    let mut rng = thread_rng();
     let idx = if demo_results.data.is_empty() { 0 } else { rng.gen_range(0..demo_results.data.len()) };
     match edit_fn(idx, &mut demo_results, &mut rng) {
         Err(_) => return,  // the edit function can't be applied; treat this as a success
@@ -186,7 +185,7 @@ run_n_times! {10,
 #[test]
 fn serialization_round_trip_add_trial() {
     // check that adding a new trial at a random position does cause the results to be detected as different
-    fn edit_fn(idx: usize, demo_results: &mut TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, rng: &mut rand::prelude::ThreadRng) -> Result<(), &'static str> {
+    fn edit_fn(idx: usize, demo_results: &mut TrialResults<K, { K::COUNT }, L>, rng: &mut ThreadRng) -> Result<(), &'static str> {
         demo_results.data.insert(idx, make_demo_trial(rng, 0.8, 0.2));
         Ok(())
     }
@@ -199,7 +198,7 @@ run_n_times! {10,
 #[test]
 fn serialization_round_trip_remove_trial() {
     // check that removing a random trial does cause the results to be detected as different
-    fn edit_fn(idx: usize, demo_results: &mut TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, _rng: &mut rand::prelude::ThreadRng) -> Result<(), &'static str> {
+    fn edit_fn(idx: usize, demo_results: &mut TrialResults<K, { K::COUNT }, L>, _rng: &mut ThreadRng) -> Result<(), &'static str> {
         if demo_results.data.is_empty() {
             return Err("no trials");
         }
@@ -215,12 +214,12 @@ run_n_times! {10,
 #[test]
 fn serialization_round_trip_flip_key() {
     // check that flipping a random key in a random chord does cause the results to be detected as different
-    fn edit_fn(idx: usize, demo_results: &mut TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, rng: &mut rand::prelude::ThreadRng) -> Result<(), &'static str> {
+    fn edit_fn(idx: usize, demo_results: &mut TrialResults<K, { K::COUNT }, L>, rng: &mut ThreadRng) -> Result<(), &'static str> {
         if demo_results.data.is_empty() {
             return Err("no trials");
         }
         let chord_idx = rng.gen_range(0..2);
-        let key_idx = rng.gen_range(0..TwiddlerKey::COUNT);
+        let key_idx = rng.gen_range(0..K::COUNT);
         let chord_keys = &mut demo_results.data[idx].chord_pair[chord_idx].get_raw_keys();
         chord_keys[key_idx] = !chord_keys[key_idx];
         Ok(())
@@ -234,7 +233,7 @@ run_n_times! {10,
 #[test]
 fn serialization_round_trip_change_repetitions() {
     // check that changing n_repetitions in a random trial does cause the results to be detected as different
-    fn edit_fn(idx: usize, demo_results: &mut TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, _rng: &mut rand::prelude::ThreadRng) -> Result<(), &'static str> {
+    fn edit_fn(idx: usize, demo_results: &mut TrialResults<K, { K::COUNT }, L>, _rng: &mut ThreadRng) -> Result<(), &'static str> {
         if demo_results.data.is_empty() {
             return Err("no trials");
         }
@@ -250,7 +249,7 @@ run_n_times! {10,
 #[test]
 fn serialization_round_trip_toggle_input_error() {
     // check that switching input between an error and a result does cause the results to be detected as different
-    fn edit_fn(idx: usize, demo_results: &mut TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, _rng: &mut rand::prelude::ThreadRng) -> Result<(), &'static str> {
+    fn edit_fn(idx: usize, demo_results: &mut TrialResults<K, { K::COUNT }, L>, _rng: &mut ThreadRng) -> Result<(), &'static str> {
         if demo_results.data.is_empty() {
             return Err("no trials");
         }
@@ -269,7 +268,7 @@ run_n_times! {10,
 #[test]
 fn serialization_round_trip_change_time() {
     // check that changing time in a random trial does cause the results to be detected as different
-    fn edit_fn(idx: usize, demo_results: &mut TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, rng: &mut rand::prelude::ThreadRng) -> Result<(), &'static str> {
+    fn edit_fn(idx: usize, demo_results: &mut TrialResults<K, { K::COUNT }, L>, rng: &mut ThreadRng) -> Result<(), &'static str> {
         if demo_results.data.is_empty() {
             return Err("no trials");
         }
@@ -288,7 +287,7 @@ run_n_times! {100,
 #[test]
 fn serialization_round_trip_change_input() {
     // check that changing chords in a random trial does cause the results to be detected as different
-    fn edit_fn(idx: usize, demo_results: &mut TrialResults<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout>, rng: &mut rand::prelude::ThreadRng) -> Result<(), &'static str> {
+    fn edit_fn(idx: usize, demo_results: &mut TrialResults<K, { K::COUNT }, L>, rng: &mut ThreadRng) -> Result<(), &'static str> {
         if demo_results.data.is_empty() {
             return Err("no trials");
         }
@@ -357,7 +356,7 @@ fn empty_chord_display_graphical() {
 fn full_chord_display_graphical() {
     // check that displaying a full chord does not panic
     let mut full_chord: TwiddlerChord = Chord::new();
-    for key in TwiddlerKey::VARIANTS.iter() {
+    for key in K::VARIANTS.iter() {
         full_chord.add_key(*key);
     }
     println!("Full chord: {}", GraphicalChord { chord: &full_chord });
@@ -367,7 +366,7 @@ run_n_times! {100,
 #[test]
 fn regular_chord_display_graphical() {
     // check that displaying a random chord does not panic
-    let regular_chord: TwiddlerChord = random_chord_(&mut rand::thread_rng(), 0.8);
+    let regular_chord: TwiddlerChord = random_chord_(&mut thread_rng(), 0.8);
     println!("Regular chord: {}", GraphicalChord { chord: &regular_chord });
 }
 }
@@ -383,7 +382,7 @@ fn empty_chord_display_text() {
 fn full_chord_display_text() {
     // check that displaying a full chord does not panic
     let mut full_chord: TwiddlerChord = Chord::new();
-    for key in TwiddlerKey::VARIANTS.iter() {
+    for key in K::VARIANTS.iter() {
         full_chord.add_key(*key);
     }
     println!("Full chord: {}", full_chord);
@@ -393,7 +392,7 @@ run_n_times! {100,
     #[test]
     fn random_chord_display_text() {
         // check that displaying a random chord does not panic
-        let random_chord: TwiddlerChord = random_chord_(&mut rand::thread_rng(), 0.8);
+        let random_chord: TwiddlerChord = random_chord_(&mut thread_rng(), 0.8);
         println!("Regular chord: {}", random_chord);
     }
 }
@@ -412,7 +411,7 @@ fn index_usb_hid_conversion() {
 run_n_times! {10,
 #[test]
 fn make_config_and_decoder() {
-    match gen_random_config_with_trial_decoder::<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, (), TwiddlerExponentialSampler<ThreadRng>, TwiddlerChordTrialUtils>(&()) {
+    match gen_random_config_with_trial_decoder::<K, { K::COUNT }, L, (), TwiddlerExponentialSampler<ThreadRng>, C>(&()) {
         Ok(_) => (),
         Err(e) => assert!(false, "Error generating config: {}", e)
     }
@@ -422,8 +421,8 @@ fn make_config_and_decoder() {
 run_n_times! {10,
 #[test]
 fn config_round_trip() {
-    let (config_bin, chord_trial_utils) = gen_random_config_with_trial_decoder::<TwiddlerKey, { TwiddlerKey::COUNT }, TwiddlerLayout, (), TwiddlerExponentialSampler<ThreadRng>, TwiddlerChordTrialUtils>(&()).unwrap();
-    let twidlk_config = chord_list_to_config_object(<TwiddlerChordTrialUtils as ChordTrialUtils<TwiddlerKey, 16, TwiddlerLayout, ThreadRng, (), TwiddlerExponentialSampler<ThreadRng>>>::get_vocab(&chord_trial_utils).clone()).unwrap();
+    let (config_bin, chord_trial_utils) = gen_random_config_with_trial_decoder::<K, { K::COUNT }, L, (), TwiddlerExponentialSampler<ThreadRng>, C>(&()).unwrap();
+    let twidlk_config = chord_list_to_config_object(<C as ChordTrialUtils<K, 16, L, ThreadRng, (), TwiddlerExponentialSampler<ThreadRng>>>::get_vocab(&chord_trial_utils).clone()).unwrap();
     let original_text_config = generate_text_config(&twidlk_config).unwrap();
     println!("original config:\n{}", original_text_config);
 
@@ -437,20 +436,20 @@ fn config_round_trip() {
 #[test]
 fn empty_chord_is_invalid() {
     let chord: TwiddlerChord = Chord::new();
-    assert!(!TwiddlerLayout::is_valid(&chord));
+    assert!(!L::is_valid(&chord));
 }
 
 run_n_times! {16,
 #[test]
 fn thumb_chord_is_invalid() {
-    let mut rng = rand::thread_rng();
+    let mut rng = thread_rng();
     let mut chord: TwiddlerChord = Chord::new();
     // choose 1-4 thumb keys at random
     let n_thumb_keys = rng.gen_range(1..5);
     for _ in 0..n_thumb_keys {
-        chord.add_key(TwiddlerLayout::THUMB[rng.gen_range(0..TwiddlerLayout::THUMB.len())]);
+        chord.add_key(L::THUMB[rng.gen_range(0..L::THUMB.len())]);
     }
-    assert!(!TwiddlerLayout::is_valid(&chord));
+    assert!(!L::is_valid(&chord));
 }
 }
 
@@ -469,31 +468,31 @@ fn reserved_to_tw() -> Vec<TwiddlerChord> {
 #[test]
 fn reserved_chords_are_invalid() {
     for reserved_chord in reserved_to_tw() {
-        assert!(!TwiddlerLayout::is_valid(&reserved_chord));
+        assert!(!L::is_valid(&reserved_chord));
     }
 }
 
 #[test]
 fn reserved_chords_can_be_made_valid() {
-    let mut rng = rand::thread_rng();
+    let mut rng = thread_rng();
     let reserved_as_tw_chords = reserved_to_tw();
     for reserved_chord in reserved_as_tw_chords {
         let mut new_chord = reserved_chord.clone();
         loop {
-            let key = TwiddlerKey::VARIANTS[rng.gen_range(0..TwiddlerKey::COUNT)];
+            let key = K::VARIANTS[rng.gen_range(0..K::COUNT)];
             if !reserved_chord.contains(key) {
                 new_chord.add_key(key);
                 break;
             }
         }
-        assert!(TwiddlerLayout::is_valid(&new_chord));
+        assert!(L::is_valid(&new_chord));
     }
 }
 
 run_n_times! {1000,
 #[test]
 fn finger_chord_is_valid() {
-    let mut rng = rand::thread_rng();
+    let mut rng = thread_rng();
     // get a random starting chord
     let mut chord: TwiddlerChord = {
         if rng.gen::<f64>() < 0.1 {
@@ -503,14 +502,14 @@ fn finger_chord_is_valid() {
         }
     };
 
-    let non_thumb = TwiddlerLayout::MAIN.concat();
+    let non_thumb = L::MAIN.concat();
     loop {
         chord.add_key(non_thumb[rng.gen_range(0..non_thumb.len())]);
         if !reserved_to_tw().to_vec().contains(&chord) {
             break;
         }
     }
-    assert!(TwiddlerLayout::is_valid(&chord));
+    assert!(L::is_valid(&chord));
 }
 }
 
@@ -608,7 +607,7 @@ run_n_times! {100,
 #[test]
 fn alignment_multiple_insertions() {
     // get a random sequence of 10 integers (we don't need to use real chords; the alignment function can use anything that implements PartialEq)
-    let mut rng = rand::thread_rng();
+    let mut rng = thread_rng();
     let mut seq = Vec::new();
     const UNUSED_ELEM: usize = 9;
     const SEQ_LEN: usize = 10;
