@@ -1,6 +1,7 @@
 use keymap_optimization::twiddler::{TwiddlerKey as K, TwiddlerLayout as L, TwiddlerChordTrialUtils as C};
 use strum::EnumCount;
 use rand::rngs::ThreadRng as R;
+use clap::Parser;
 
 use keymap_optimization::chord_preferences::data_collection_keymap_gen::run;
 
@@ -43,12 +44,27 @@ type E = keymap_optimization_ml::reward_model::RewardEmbeddingBase<{ K::COUNT }>
 #[cfg(feature = "model-ensemble")]
 type E = keymap_optimization_ml::reward_model::Ensemble<keymap_optimization_ml::reward_model::RewardModel<{ K::COUNT }, keymap_optimization_ml::reward_model::RewardEmbeddingBase<{ K::COUNT }>>>;
 
+#[derive(Parser, Debug)]
+#[command(name = "sample_twiddler")]
+#[command(about = "Generate chord sampling configuration with trained model", long_about = None)]
+struct Args {
+    /// Random seed for reproducibility (affects weight initialization and train/test split)
+    #[arg(short, long, default_value_t = 42)]
+    seed: u64,
+
+    /// Number of training epochs
+    #[arg(short = 'e', long, default_value_t = 2001)]
+    epochs: usize,
+}
+
 fn main() {
+    let args = Args::parse();
+
     #[cfg(feature = "sampler-exponential")]
     let initialization_info = ();
 
     #[cfg(any(feature = "sampler-possible", feature = "sampler-uncertain"))]
-    let initialization_info = match keymap_optimization_ml::train::train::<K, { K::COUNT }, L, E>(keymap_optimization::local_env::DATA_PATH, 2001) {
+    let initialization_info = match keymap_optimization_ml::train::train::<K, { K::COUNT }, L, E>(keymap_optimization::local_env::DATA_PATH, args.epochs, args.seed) {
         Ok(model) => Box::new(model.chord_embedding),
         Err(e) => panic!("error training model: {}", e)
     };

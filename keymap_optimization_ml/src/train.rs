@@ -89,7 +89,10 @@ fn get_formatted_data<K: Key, const N: usize, L: Layout<K, N>>(results_path: &st
 }
 
 
-pub fn train<K: Key, const N: usize, L: Layout<K, N>, E: RewardEmbedding>(results_path: &str, n_epochs: usize) -> Result<Box<RewardModel<N, E>>, Box<dyn std::error::Error>> {
+pub fn train<K: Key, const N: usize, L: Layout<K, N>, E: RewardEmbedding>(results_path: &str, n_epochs: usize, seed: u64) -> Result<Box<RewardModel<N, E>>, Box<dyn std::error::Error>> {
+    // Seed PyTorch for reproducible weight initialization
+    tch::manual_seed(seed as i64);
+
     let vs = nn::VarStore::new(tch::Device::Cpu);
     let model = Box::new(RewardModel::<N, E>::new(&vs.root()));
     let mut opt = nn::Adam::default().build(&vs, 1e-3)?;
@@ -106,8 +109,8 @@ pub fn train<K: Key, const N: usize, L: Layout<K, N>, E: RewardEmbedding>(result
     Ok(model)
 }
 
-pub fn run<K: Key, const N: usize, L: Layout<K, N>, E: RewardEmbedding>(results_path: &str) {
-    match train::<K, N, L, E>(results_path, 2001) {
+pub fn run<K: Key, const N: usize, L: Layout<K, N>, E: RewardEmbedding>(results_path: &str, n_epochs: usize, seed: u64) {
+    match train::<K, N, L, E>(results_path, n_epochs, seed) {
         Ok(_) => (),
         Err(e) => {
             eprintln!("Error during training: {}", e);

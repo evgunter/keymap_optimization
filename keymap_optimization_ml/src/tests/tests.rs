@@ -8,9 +8,10 @@ use crate::train::train;
 use crate::reward_model::{Ensemble, RewardEmbedding, RewardEmbeddingBase, RewardModel};
 
 const TEST_RESULTS_PATH: &str = "./src/tests/test_data";
+const TEST_SEED: u64 = 42;
 
 fn train_and_sample<E: RewardEmbedding>(quality_ratio: f64, n_epochs: usize, data_path: &str) {
-    let model = match train::<K, { K::COUNT }, L, E>(data_path, n_epochs) {
+    let model = match train::<K, { K::COUNT }, L, E>(data_path, n_epochs, TEST_SEED) {
         Ok(model) => model,
         Err(e) => return assert!(false, "Error training model: {}", e)
     };
@@ -81,7 +82,7 @@ fn test_exponential_sampler() {
 fn test_slow_samplers() {
     type E = RewardEmbeddingBase<{ K::COUNT }>;
     // since we're just checking that nothing panics, we can train the model for a very short time since its performance doesn't matter
-    let embedder = match train::<K, { K::COUNT }, L, E>(TEST_RESULTS_PATH, 101) {
+    let embedder = match train::<K, { K::COUNT }, L, E>(TEST_RESULTS_PATH, 101, TEST_SEED) {
         Ok(model) => Box::new(model.chord_embedding),
         Err(e) => return assert!(false, "Error training model: {}", e)
     };
