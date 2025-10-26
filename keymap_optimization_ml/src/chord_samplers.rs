@@ -54,7 +54,7 @@ impl<K: Key, const N: usize, L: Layout<K, N>, R: rand::Rng, E: RewardEmbedding> 
 
         loop {
             // select a random element of possible_probs
-            let (chord, possible_prob) = self.chords_with_possible_probs.choose(&mut rand::thread_rng()).unwrap();  // unwrap is safe because there are always chords
+            let (chord, possible_prob) = self.chords_with_possible_probs.choose(&mut self.rng).unwrap();  // unwrap is safe because there are always chords
             if self.rng.gen::<f64>() < *possible_prob {
                 return chord.clone()
             }
