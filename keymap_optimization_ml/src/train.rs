@@ -9,6 +9,11 @@ use crate::reward_model::{loss, Dataset, RewardEmbedding, RewardModel};
 
 const TEST_FRAC: f64 = 0.1;
 
+// Learning rate scheduling constants
+const LR_PATIENCE: usize = 50;  // Number of epochs to wait before reducing LR
+const LR_DECAY_FACTOR: f64 = 0.5;  // Multiply LR by this factor when reducing
+const MIN_LR: f64 = 1e-6;  // Minimum learning rate
+
 pub fn chord_to_tensor<K: Key, const N: usize, L: Layout<K, N>>(chord: &Chord<K, N, L>) -> Tensor {
     Tensor::f_from_slice(&chord.to_vector().into_iter().map(|c| if c { 1.0 } else { 0.0 }).collect::<Vec<f32>>()).unwrap()
 }
@@ -91,15 +96,49 @@ pub fn train<K: Key, const N: usize, L: Layout<K, N>, E: RewardEmbedding>(result
     let model = Box::new(RewardModel::<N, E>::new(&vs.root()));
     let mut opt = nn::Adam::default().build(&vs, 1e-3)?;
     let data = get_formatted_data::<K, N, L>(results_path)?;
+
+    // Learning rate scheduling state
+    let mut best_test_loss = f64::INFINITY;
+    let mut epochs_without_improvement = 0;
+    let mut current_lr = 1e-3;
+
     for epoch in 0..n_epochs {
         // we can process all the data at once since it's quite small
         let train_loss = loss::<N, E>(&model, &data.train_input, &data.train_target);
         opt.backward_step(&train_loss);
+
         if epoch % 100 == 0 {
             let test_loss = loss::<N, E>(&model, &data.test_input, &data.test_target);
-            println!("epoch: {:<5} train loss: {:<24}, test loss: {:<24}", epoch, (train_loss.double_value(&[])) as f32, (test_loss.double_value(&[])) as f32);
+            let test_loss_val = test_loss.double_value(&[]);
+
+            println!("epoch: {:<5} train loss: {:<24}, test loss: {:<24}, lr: {:<12}",
+                     epoch,
+                     (train_loss.double_value(&[])) as f32,
+                     test_loss_val as f32,
+                     current_lr);
+
+            // Check if test loss improved
+            if test_loss_val < best_test_loss {
+                best_test_loss = test_loss_val;
+                epochs_without_improvement = 0;
+            } else {
+                epochs_without_improvement += 100;
+
+                // Reduce learning rate if no improvement for LR_PATIENCE epochs
+                if epochs_without_improvement >= LR_PATIENCE && current_lr > MIN_LR {
+                    current_lr *= LR_DECAY_FACTOR;
+                    if current_lr < MIN_LR {
+                        current_lr = MIN_LR;
+                    }
+                    opt.set_lr(current_lr);
+                    epochs_without_improvement = 0;
+                    println!("  -> Reducing learning rate to {}", current_lr);
+                }
+            }
         }
     }
+
+    println!("Training completed. Best test loss: {}", best_test_loss);
     Ok(model)
 }
 
