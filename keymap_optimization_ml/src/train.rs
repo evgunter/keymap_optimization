@@ -4,10 +4,12 @@ use keymap_optimization::keyboard_config::{Chord, Layout, Key};
 use keymap_optimization::chord_preferences::TrialResults;
 use keymap_optimization::chord_preferences::gather_chords::{ErrCode, accuracy_from_chord_pair};
 use rand::prelude::SliceRandom;
+use rand::SeedableRng;
 
 use crate::reward_model::{loss, Dataset, RewardEmbedding, RewardModel};
 
 const TEST_FRAC: f64 = 0.1;
+const TRAIN_TEST_SPLIT_SEED: u64 = 42;
 
 pub fn chord_to_tensor<K: Key, const N: usize, L: Layout<K, N>>(chord: &Chord<K, N, L>) -> Tensor {
     Tensor::f_from_slice(&chord.to_vector().into_iter().map(|c| if c { 1.0 } else { 0.0 }).collect::<Vec<f32>>()).unwrap()
@@ -58,9 +60,10 @@ fn get_formatted_data<K: Key, const N: usize, L: Layout<K, N>>(results_path: &st
     // split into train and test divisions
     let tot_len = input.len();
     let num_test = (tot_len as f64 * TEST_FRAC).round() as usize;
-    // choose num_train random indices
+    // choose num_train random indices with a seeded RNG for reproducibility
     let mut indices: Vec<usize> = (0..tot_len).collect();
-    indices.shuffle(&mut rand::thread_rng());
+    let mut rng = rand::rngs::StdRng::seed_from_u64(TRAIN_TEST_SPLIT_SEED);
+    indices.shuffle(&mut rng);
     println!("split into {} training examples, {} test examples", tot_len - num_test, num_test);
     let mut train_indices = indices.split_off(num_test);
     train_indices.sort();
