@@ -4,6 +4,7 @@ use rand::rngs::ThreadRng as R;
 use clap::Parser;
 
 use keymap_optimization::chord_preferences::data_collection_keymap_gen::run;
+use keymap_optimization_ml::cli_args::TrainingArgs;
 
 // check that the feature settings are valid
 
@@ -44,21 +45,8 @@ type E = keymap_optimization_ml::reward_model::RewardEmbeddingBase<{ K::COUNT }>
 #[cfg(feature = "model-ensemble")]
 type E = keymap_optimization_ml::reward_model::Ensemble<keymap_optimization_ml::reward_model::RewardModel<{ K::COUNT }, keymap_optimization_ml::reward_model::RewardEmbeddingBase<{ K::COUNT }>>>;
 
-#[derive(Parser, Debug)]
-#[command(name = "sample_twiddler")]
-#[command(about = "Generate chord sampling configuration with trained model", long_about = None)]
-struct Args {
-    /// Random seed for reproducibility (affects weight initialization and train/test split)
-    #[arg(short, long, default_value_t = 42)]
-    seed: u64,
-
-    /// Number of training epochs
-    #[arg(short = 'e', long, default_value_t = 2001)]
-    epochs: usize,
-}
-
 fn main() {
-    let args = Args::parse();
+    let args = TrainingArgs::parse();
 
     #[cfg(feature = "sampler-exponential")]
     let initialization_info = ();
