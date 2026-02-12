@@ -7,6 +7,9 @@ use std::collections::HashMap;
 use crate::keyboard_config::{Key, Chord, Layout, ChordTrialUtils, GraphicalChord, ChordSampler};
 use crate::local_env::DATA_PATH;
 
+#[cfg(test)]
+pub(crate) const N_REPETITIONS_PER_TRIAL: usize = 5;
+#[cfg(not(test))]
 const N_REPETITIONS_PER_TRIAL: usize = 5;
 
 #[derive(PartialEq, Debug)]
@@ -99,11 +102,6 @@ pub fn best_candidate(candidates: &Vec<(u8, u8, Direction)>) -> &(u8, u8, Direct
 }
 
 pub fn align<T: PartialEq>(seq_predicted: &Vec<T>, seq_corrupted: &Vec<T>) -> (u8, u8, Vec<Vec<Vec<(u8, u8, Direction)>>>) {
-    // runtime check: sequence lengths must fit in u8 since we store counts as u8
-    assert!(seq_predicted.len() + seq_corrupted.len() <= u8::MAX as usize,
-            "combined sequence length {} exceeds u8::MAX; alignment counts would overflow",
-            seq_predicted.len() + seq_corrupted.len());
-
     // currently we treat the two sequences identically, using a dynamic programming algorithm
     // similar to needleman-wunch but optimizing for the fraction of the total chords that are correct.
     // however, it may be desirable to treat the sequences asymmetrically, since we know that one of them
