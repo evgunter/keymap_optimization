@@ -99,6 +99,11 @@ pub fn best_candidate(candidates: &Vec<(u8, u8, Direction)>) -> &(u8, u8, Direct
 }
 
 pub fn align<T: PartialEq>(seq_predicted: &Vec<T>, seq_corrupted: &Vec<T>) -> (u8, u8, Vec<Vec<Vec<(u8, u8, Direction)>>>) {
+    // runtime check: sequence lengths must fit in u8 since we store counts as u8
+    assert!(seq_predicted.len() + seq_corrupted.len() <= u8::MAX as usize,
+            "combined sequence length {} exceeds u8::MAX; alignment counts would overflow",
+            seq_predicted.len() + seq_corrupted.len());
+
     // currently we treat the two sequences identically, using a dynamic programming algorithm
     // similar to needleman-wunch but optimizing for the fraction of the total chords that are correct.
     // however, it may be desirable to treat the sequences asymmetrically, since we know that one of them
@@ -253,7 +258,7 @@ pub fn accuracy_from_chord_pair<K: Key, const N: usize, L: Layout<K, N>>(actual_
     compute_accuracy::<K, N, L>(&actual_input, &expected_input.to_vec())
 }
 
-fn gather_data<'a, K: Key, const N: usize, L: Layout<K, N>, I, S: ChordSampler<K, N, L, ThreadRng, I>, C: ChordTrialUtils<K, N, L, ThreadRng, I, S>>(chord_trial_utils: C) -> Result<TrialResults<K, N, L>, std::io::Error> {
+fn gather_data<K: Key, const N: usize, L: Layout<K, N>, I, S: ChordSampler<K, N, L, ThreadRng, I>, C: ChordTrialUtils<K, N, L, ThreadRng, I, S>>(chord_trial_utils: C) -> Result<TrialResults<K, N, L>, std::io::Error> {
     let rng = &mut rand::thread_rng();
     println!("you will be shown two chords. after some time to practice, you will need to type this pair of chords {} times, as quickly as possible.", N_REPETITIONS_PER_TRIAL);
     
@@ -334,22 +339,21 @@ fn gather_data<'a, K: Key, const N: usize, L: Layout<K, N>, I, S: ChordSampler<K
     }
 }
 
-pub fn gather_and_save_data<'a, K: Key, const N: usize, L: Layout<K, N>, I, S: ChordSampler<K, N, L, ThreadRng, I>, C: ChordTrialUtils<K, N, L, ThreadRng, I, S>>(chord_trial_utils_file: &str) -> Result<TrialResults<K, N, L>, std::io::Error> {
+pub fn gather_and_save_data<K: Key, const N: usize, L: Layout<K, N>, I, S: ChordSampler<K, N, L, ThreadRng, I>, C: ChordTrialUtils<K, N, L, ThreadRng, I, S>>(chord_trial_utils_file: &str) -> Result<TrialResults<K, N, L>, std::io::Error> {
     let results_path = format!("{}/chord_preferences_results_{}.json",
                                        DATA_PATH,
-                                       std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+                                       std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("system clock before UNIX epoch").as_secs());
     let chord_trial_utils: C = serde_json::from_reader(std::fs::File::open(std::path::Path::new(chord_trial_utils_file))?)?;
     let results = gather_data::<K, N, L, I, S, C>(chord_trial_utils)?;
     results.save(&results_path)?;
     Ok(results)
 }
 
-pub fn run<'a, K: Key, const N: usize, L: Layout<K, N>, I, S: ChordSampler<K, N, L, ThreadRng, I>, C: ChordTrialUtils<K, N, L, ThreadRng, I, S>>(chord_trial_utils_file: &str) {
+pub fn run<K: Key, const N: usize, L: Layout<K, N>, I, S: ChordSampler<K, N, L, ThreadRng, I>, C: ChordTrialUtils<K, N, L, ThreadRng, I, S>>(chord_trial_utils_file: &str) {
     match gather_and_save_data::<K, N, L, I, S, C>(chord_trial_utils_file) {
-        Ok(gather_results) => gather_results,
+        Ok(_) => (),
         Err(e) => {
             eprintln!("Error gathering or saving data: {}", e);
-            return;
         }
-    };
+    }
 }

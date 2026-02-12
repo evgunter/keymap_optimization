@@ -18,7 +18,8 @@ pub fn chord_to_tensor<K: Key, const N: usize, L: Layout<K, N>>(chord: &Chord<K,
 fn load_data<K: Key, const N: usize, L: Layout<K, N>>(results_path: &str) -> Result<TrialResults<K, N, L>, Box<dyn std::error::Error>> {
     // load the data from all the files chord_preferences_results*.json in RESULTS_PATH
     println!("loading data from {}", results_path);
-    let files: Vec<std::fs::DirEntry> = std::fs::read_dir(results_path)?
+    let files: Vec<std::fs::DirEntry> = std::fs::read_dir(results_path)
+        .map_err(|e| format!("failed to read results directory '{}': {}", results_path, e))?
         .filter(|f|
             match f {
                 Ok(f) => {

@@ -54,7 +54,10 @@ fn main() {
     #[cfg(any(feature = "sampler-possible", feature = "sampler-uncertain"))]
     let initialization_info = match keymap_optimization_ml::train::train::<K, { K::COUNT }, L, E>(keymap_optimization::local_env::DATA_PATH, args.epochs, args.seed) {
         Ok(model) => Box::new(model.chord_embedding),
-        Err(e) => panic!("error training model: {}", e)
+        Err(e) => {
+            eprintln!("error training model: {}", e);
+            std::process::exit(1);
+        }
     };
 
     run::<K, { K::COUNT }, L, E, S, C>(&initialization_info);
