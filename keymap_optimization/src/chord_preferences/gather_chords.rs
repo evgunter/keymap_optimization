@@ -7,9 +7,6 @@ use std::collections::HashMap;
 use crate::keyboard_config::{Key, Chord, Layout, ChordTrialUtils, GraphicalChord, ChordSampler};
 use crate::local_env::DATA_PATH;
 
-#[cfg(test)]
-pub(crate) const N_REPETITIONS_PER_TRIAL: usize = 5;
-#[cfg(not(test))]
 const N_REPETITIONS_PER_TRIAL: usize = 5;
 
 #[derive(PartialEq, Debug)]
@@ -67,7 +64,7 @@ impl<K: Key, const N: usize, L: Layout<K, N>> TrialResults<K, N, L> {
     }
 }
 
-pub fn alignment_quality<T: PartialEq>(seq_predicted: &Vec<T>, seq_corrupted: &Vec<T>) -> (u8, u8) {
+pub fn alignment_quality<T: PartialEq>(seq_predicted: &Vec<T>, seq_corrupted: &Vec<T>) -> (usize, usize) {
     // returns the number of correct chords and the number of incorrect chords after alignment.
     let (correct, incorrect, _) = align(seq_predicted, seq_corrupted);
     (correct, incorrect)
@@ -90,7 +87,7 @@ impl std::fmt::Display for Direction {
     }
 }
 
-pub fn best_candidate(candidates: &Vec<(u8, u8, Direction)>) -> &(u8, u8, Direction) {
+pub fn best_candidate(candidates: &Vec<(usize, usize, Direction)>) -> &(usize, usize, Direction) {
     // these two unwraps are safe: the first because the total number of elements is nonzero (it must be at least 2*N_REPETITIONS_PER_TRIAL),
     // so the partial_cmp will never fail due to zero division;
     // the second because there is guaranteed to be at least one candidate solution.
@@ -101,7 +98,7 @@ pub fn best_candidate(candidates: &Vec<(u8, u8, Direction)>) -> &(u8, u8, Direct
               .unwrap()
 }
 
-pub fn align<T: PartialEq>(seq_predicted: &Vec<T>, seq_corrupted: &Vec<T>) -> (u8, u8, Vec<Vec<Vec<(u8, u8, Direction)>>>) {
+pub fn align<T: PartialEq>(seq_predicted: &Vec<T>, seq_corrupted: &Vec<T>) -> (usize, usize, Vec<Vec<Vec<(usize, usize, Direction)>>>) {
     // currently we treat the two sequences identically, using a dynamic programming algorithm
     // similar to needleman-wunch but optimizing for the fraction of the total chords that are correct.
     // however, it may be desirable to treat the sequences asymmetrically, since we know that one of them
@@ -163,7 +160,7 @@ pub fn align<T: PartialEq>(seq_predicted: &Vec<T>, seq_corrupted: &Vec<T>) -> (u
     // any index is min(n,m). so, the space (and time) complexity is O(n*m*min(n,m)).
     // this is no problem at all for any plausible values of n and m.
 
-    let mut nw_matrix: Vec<Vec<Vec<(u8, u8, Direction)>>> = vec![vec![Vec::new(); seq_corrupted.len() + 1]; seq_predicted.len() + 1];
+    let mut nw_matrix: Vec<Vec<Vec<(usize, usize, Direction)>>> = vec![vec![Vec::new(); seq_corrupted.len() + 1]; seq_predicted.len() + 1];
     for i in 0..seq_predicted.len() + 1 {
         for j in 0..seq_corrupted.len() + 1 {
             // the first row and column are initialized to describe the cost of inserting fillers at the start
@@ -182,11 +179,11 @@ pub fn align<T: PartialEq>(seq_predicted: &Vec<T>, seq_corrupted: &Vec<T>) -> (u
                         nw_post_j[0].push((0, *ni, Direction::Horz));
                     }
                 } else {
-                    nw_matrix[i][j].push((0, j as u8, Direction::Horz));
+                    nw_matrix[i][j].push((0, j, Direction::Horz));
                 }
                 // the direction at (0, 0) doesn't matter, so it's ok that we always set it to Horz
             } else if j == 0 {
-                nw_matrix[i][j].push((0, i as u8, Direction::Vert));
+                nw_matrix[i][j].push((0, i, Direction::Vert));
             // the -1s are because the 0th element corresponds to the space before the sequence, not the first element of the sequence
             } else if seq_predicted[i - 1] == seq_corrupted[j - 1] {
                 // in this case, the best thing to do is always to align these two elements, i.e. moving one
@@ -204,8 +201,8 @@ pub fn align<T: PartialEq>(seq_predicted: &Vec<T>, seq_corrupted: &Vec<T>) -> (u
                 // (inserting a filler in either sequence or neither; equivalently, moving down, diagonal, or right to get here)
                 // we will store all our candidate solutions indexed by the number of correct elements,
                 // since we know this cannot exceed 2 * N_REPETITIONS_PER_TRIAL = 10.
-                let mut candidates: HashMap<u8, (u8, Direction)> = HashMap::new();
-                fn update_if_better(cd: &mut HashMap<u8, (u8, Direction)>, (nc, ni_new, dirn_new): (&u8, &u8, &Direction)) {
+                let mut candidates: HashMap<usize, (usize, Direction)> = HashMap::new();
+                fn update_if_better(cd: &mut HashMap<usize, (usize, Direction)>, (nc, ni_new, dirn_new): (&usize, &usize, &Direction)) {
                     let _ = cd.insert(*nc, match cd.get(nc) {
                         Some((ni_old, dirn_old)) => if ni_new < ni_old { (*ni_new, *dirn_new) } else { (*ni_old, *dirn_old) },
                         None => (*ni_new, *dirn_new)
@@ -248,7 +245,7 @@ pub fn compute_accuracy<K: Key, const N: usize, L: Layout<K, N>>(actual_input: &
     // we don't give an ''partial credit'' if the user gets most of the keys in a chord right but messes up one or two; the result of this
     // will generally be illegible, so we want the reward model to learn to avoid chords which are difficult to type accurately.
     let (correct, incorrect) = alignment_quality(expected_input, actual_input);
-    (correct as f64) / ((correct + incorrect) as f64)
+    correct as f64 / (correct + incorrect) as f64
 }
 
 pub fn accuracy_from_chord_pair<K: Key, const N: usize, L: Layout<K, N>>(actual_input: &Vec<Chord<K, N, L>>, chord_pair: &[Chord<K, N, L>; 2]) -> f64 {

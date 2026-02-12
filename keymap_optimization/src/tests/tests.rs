@@ -2,7 +2,7 @@
 
 use crate::keyboard_config::{Chord, ChordTrialUtils, GraphicalChord, Layout};
 use crate::twiddler::{chord_list_to_config_object, random_chord_, Node, TwiddlerKey as K, TwiddlerChord, TwiddlerLayout as L, TwiddlerChordTrialUtils as C, TwiddlerExponentialSampler, RESERVED, USB_HID_COUNT};
-use crate::chord_preferences::gather_chords::{TrialResults, TrialData, ErrCode, align, best_candidate, Direction, Performance, N_REPETITIONS_PER_TRIAL};
+use crate::chord_preferences::gather_chords::{TrialResults, TrialData, ErrCode, align, best_candidate, Direction, Performance};
 use crate::chord_preferences::data_collection_keymap_gen::gen_random_config_with_trial_decoder;
 use twidlk_rust::{generate_text_config, read_config};
 use rand::{thread_rng, Rng, rngs::ThreadRng};
@@ -513,7 +513,7 @@ fn finger_chord_is_valid() {
 }
 }
 
-fn print_dirn_matrix<T: Copy + std::fmt::Display>(nwmatrix: &Vec<Vec<Vec<(u8, u8, Direction)>>>, seq1: &Vec<T>, seq2: &Vec<T>) {
+fn print_dirn_matrix<T: Copy + std::fmt::Display>(nwmatrix: &Vec<Vec<Vec<(usize, usize, Direction)>>>, seq1: &Vec<T>, seq2: &Vec<T>) {
     let (fmt1, fmt2) = (seq1.iter().map(|x| format!("{}", x)).collect::<Vec<String>>(), seq2.iter().map(|x| format!("{}", x)).collect::<Vec<String>>());
     let max_len = fmt1.iter().chain(fmt2.iter()).map(|s| s.len()).max().unwrap();
     let seq2_fmt = pad_to_length(seq2.iter().map(|x| format!("{}", x)).collect(), max_len);
@@ -539,7 +539,7 @@ fn print_dirn_matrix<T: Copy + std::fmt::Display>(nwmatrix: &Vec<Vec<Vec<(u8, u8
     }
 }
 
-fn alignment_from_nwmatrix<T: Copy + std::fmt::Display>(seq1: &Vec<T>, seq2: &Vec<T>, nwmatrix: Vec<Vec<Vec<(u8, u8, Direction)>>>) -> Vec<(Option<T>, Option<T>)> {
+fn alignment_from_nwmatrix<T: Copy + std::fmt::Display>(seq1: &Vec<T>, seq2: &Vec<T>, nwmatrix: Vec<Vec<Vec<(usize, usize, Direction)>>>) -> Vec<(Option<T>, Option<T>)> {
     // build up the alignment in reverse order
     let mut aligned = Vec::new();
     let mut i = nwmatrix.len()-1;
@@ -601,22 +601,6 @@ fn display_aligned<T: std::fmt::Display>(alignment: Vec<(Option<T>, Option<T>)>)
     let (fmt1, fmt2) = (pad_to_length::<String>(fmt1, max_len), pad_to_length::<String>(fmt2, max_len));
 
     format!("{}\n{}", fmt1.join(", "), fmt2.join(", "))
-}
-
-#[test]
-fn alignment_counts_cannot_overflow_u8() {
-    // align() stores correct/incorrect counts as u8. The maximum value of
-    // correct + incorrect is the aligned sequence length, which is at most
-    // seq_predicted.len() + seq_corrupted.len(). In a chord trial, both
-    // sequences have length 2 * N_REPETITIONS_PER_TRIAL (the expected sequence
-    // is exactly this, and the actual input is similar). Even if the user
-    // somehow typed 10x as many chords as expected, the combined length
-    // would still be far below u8::MAX.
-    let expected_seq_len = 2 * N_REPETITIONS_PER_TRIAL;
-    let worst_case_combined = expected_seq_len + expected_seq_len * 10;
-    assert!(worst_case_combined <= u8::MAX as usize,
-            "N_REPETITIONS_PER_TRIAL={} is too large: worst-case combined alignment length {} exceeds u8::MAX",
-            N_REPETITIONS_PER_TRIAL, worst_case_combined);
 }
 
 run_n_times! {100,
