@@ -91,17 +91,10 @@ impl<K: Key, const N: usize, L: Layout<K, N>, R: rand::Rng, E: RewardEmbedding> 
         let binom_p = 0.5;
         // n/2 = m-1 >= i, so we can use usize instead of isize.
         let binom_shift = (self.chords_with_possible_probs_sorted.len() - 1 - most_uncertain_idx) as usize;
-        let sampled_idx = {
-            const MAX_REJECTION_ATTEMPTS: usize = 10_000;
-            let mut attempts = 0;
-            loop {
-                let sampled_idx_raw = (0..binom_n).map(|_| if self.rng.gen::<f64>() < binom_p { 1 } else { 0 }).sum::<usize>() as isize - (binom_shift as isize);
-                if sampled_idx_raw >= 0 && sampled_idx_raw < self.chords_with_possible_probs_sorted.len() as isize {
-                    break sampled_idx_raw as usize;
-                }
-                attempts += 1;
-                assert!(attempts < MAX_REJECTION_ATTEMPTS,
-                        "rejection sampling in MostUncertainPossibilityChordSampler exceeded {} attempts", MAX_REJECTION_ATTEMPTS);
+        let sampled_idx = loop {
+            let sampled_idx_raw = (0..binom_n).map(|_| if self.rng.gen::<f64>() < binom_p { 1 } else { 0 }).sum::<usize>() as isize - (binom_shift as isize);
+            if sampled_idx_raw >= 0 && sampled_idx_raw < self.chords_with_possible_probs_sorted.len() as isize {
+                break sampled_idx_raw as usize;
             }
         };
         let (chord, _prob) = &self.chords_with_possible_probs_sorted[sampled_idx];
