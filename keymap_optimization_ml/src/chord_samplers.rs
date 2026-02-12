@@ -22,7 +22,7 @@ fn all_chords<K: Key, const N: usize, L: Layout<K, N>>() -> Vec<Chord<K, N, L>> 
 
 pub fn get_possible_probabilities<K: Key, const N: usize, L: Layout<K, N>, E: RewardEmbedding>(embedder: &E) -> Result<Vec<(Chord<K, N, L>, f64)>, Box<dyn std::error::Error>> {
     let all_chords: Vec<Chord<K, N, L>> = all_chords::<K, N, L>();
-    let all_chords_tensor = Tensor::stack(&all_chords.clone().into_iter().map(|c| chord_to_tensor(&c)).collect::<Vec<Tensor>>(), 0);
+    let all_chords_tensor = Tensor::stack(&all_chords.iter().map(|c| chord_to_tensor(c)).collect::<Vec<Tensor>>(), 0);
 
     // compute the probability of being possible for each chord
     let (_, _, possible_probs) = embedder.embed_chords(&all_chords_tensor);

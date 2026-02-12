@@ -11,8 +11,8 @@ pub fn gen_random_config_with_trial_decoder<K: Key, const N: usize, L: Layout<K,
     Ok((chord_trial_utils.get_config()?, chord_trial_utils))
 }
 
-pub fn run<'a, K: Key, const N: usize, L: Layout<K,N>, I, S: ChordSampler<K, N, L, R, I>, C: ChordTrialUtils<K, N, L, R, I, S>>(initialization_info: &I) {
-    let current_time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+pub fn run<K: Key, const N: usize, L: Layout<K,N>, I, S: ChordSampler<K, N, L, R, I>, C: ChordTrialUtils<K, N, L, R, I, S>>(initialization_info: &I) {
+    let current_time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("system clock before UNIX epoch").as_secs();
     let results_path = format!("{}/config_{}.cfg", DATA_PATH, current_time);
 
     let (config, trial_decoder) = match gen_random_config_with_trial_decoder::<K, N, L, I, S, C>(initialization_info) {
@@ -32,7 +32,14 @@ pub fn run<'a, K: Key, const N: usize, L: Layout<K,N>, I, S: ChordSampler<K, N, 
     }
 
     let decoder_path = format!("{}/decoder_{}.json", DATA_PATH, current_time);
-    match std::fs::write(&decoder_path, serde_json::to_string(&trial_decoder).unwrap()) {
+    let decoder_json = match serde_json::to_string(&trial_decoder) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("error serializing decoder: {}", e);
+            return;
+        }
+    };
+    match std::fs::write(&decoder_path, decoder_json) {
         Ok(_) => (),
         Err(e) => {
             eprintln!("error writing decoder to file: {}", e);

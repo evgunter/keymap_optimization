@@ -513,7 +513,7 @@ fn finger_chord_is_valid() {
 }
 }
 
-fn print_dirn_matrix<T: Copy + std::fmt::Display>(nwmatrix: &Vec<Vec<Vec<(u8, u8, Direction)>>>, seq1: &Vec<T>, seq2: &Vec<T>) {
+fn print_dirn_matrix<T: Copy + std::fmt::Display>(nwmatrix: &Vec<Vec<Vec<(usize, usize, Direction)>>>, seq1: &Vec<T>, seq2: &Vec<T>) {
     let (fmt1, fmt2) = (seq1.iter().map(|x| format!("{}", x)).collect::<Vec<String>>(), seq2.iter().map(|x| format!("{}", x)).collect::<Vec<String>>());
     let max_len = fmt1.iter().chain(fmt2.iter()).map(|s| s.len()).max().unwrap();
     let seq2_fmt = pad_to_length(seq2.iter().map(|x| format!("{}", x)).collect(), max_len);
@@ -539,7 +539,7 @@ fn print_dirn_matrix<T: Copy + std::fmt::Display>(nwmatrix: &Vec<Vec<Vec<(u8, u8
     }
 }
 
-fn alignment_from_nwmatrix<T: Copy + std::fmt::Display>(seq1: &Vec<T>, seq2: &Vec<T>, nwmatrix: Vec<Vec<Vec<(u8, u8, Direction)>>>) -> Vec<(Option<T>, Option<T>)> {
+fn alignment_from_nwmatrix<T: Copy + std::fmt::Display>(seq1: &Vec<T>, seq2: &Vec<T>, nwmatrix: Vec<Vec<Vec<(usize, usize, Direction)>>>) -> Vec<(Option<T>, Option<T>)> {
     // build up the alignment in reverse order
     let mut aligned = Vec::new();
     let mut i = nwmatrix.len()-1;
