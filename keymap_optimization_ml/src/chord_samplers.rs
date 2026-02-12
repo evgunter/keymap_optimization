@@ -73,7 +73,7 @@ impl<K: Key, const N: usize, L: Layout<K, N>, R: rand::Rng, E: RewardEmbedding> 
             Ok(chords_with_probs) => chords_with_probs,
             Err(e) => return Err(e),
         };
-        chords_with_possible_probs.sort_by(|(_, p1), (_, p2)| p1.partial_cmp(p2).unwrap_or(std::cmp::Ordering::Equal));
+        chords_with_possible_probs.sort_by(|(_, p1), (_, p2)| p1.partial_cmp(p2).unwrap());
         Ok(Self { rng, chords_with_possible_probs_sorted: chords_with_possible_probs })
     }
 
