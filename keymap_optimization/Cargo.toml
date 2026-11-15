@@ -13,6 +13,7 @@ serde_arrays = "0.1"
 serde-big-array = "0.5.1"
 twidlk_rust = { git = "https://github.com/evgunter/twidlk_rust" }
 queues = "1.0.2"
+evdev = "0.13.2"
 
 [dev-dependencies]
 paste = "1.0"
