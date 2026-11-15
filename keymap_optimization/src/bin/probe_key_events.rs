@@ -2,7 +2,7 @@
 // With no argument, lists the available devices. Needs read access to /dev/input (root or the `input` group).
 // The device is grabbed while this runs, so its keystrokes go nowhere else; stop with Ctrl-C from another keyboard.
 
-use evdev::{Device, EventSummary};
+use evdev::{Device, EventSummary, KeyCode};
 
 // evdev key event values
 const RELEASE: i32 = 0;
@@ -10,8 +10,10 @@ const PRESS: i32 = 1;
 const AUTOREPEAT: i32 = 2;
 
 fn list_devices() {
+    // one physical device can expose several interfaces (e.g. keyboard and mouse), each listed separately
     for (path, device) in evdev::enumerate() {
-        println!("{}\t{}", path.display(), device.name().unwrap_or("<unnamed>"));
+        let has_letter_keys = device.supported_keys().is_some_and(|keys| keys.contains(KeyCode::KEY_A));
+        println!("{}\t{}\t{}", path.display(), device.name().unwrap_or("<unnamed>"), if has_letter_keys { "keyboard" } else { "not a keyboard" });
     }
 }
 
