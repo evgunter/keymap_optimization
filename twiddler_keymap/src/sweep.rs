@@ -56,8 +56,10 @@ pub fn read_outcomes(results: impl BufRead) -> Result<HashMap<Chord, Outcome>, R
 
 /// Appends a record as one line of JSON.
 pub fn write_record(results: &mut impl Write, record: &Record) -> io::Result<()> {
-    serde_json::to_writer(&mut *results, record)?;
-    writeln!(results)?;
+    // written in one piece, so that being killed mid-write is unlikely to leave part of a record behind
+    let mut line = serde_json::to_string(record)?;
+    line.push('\n');
+    results.write_all(line.as_bytes())?;
     results.flush()
 }
 
