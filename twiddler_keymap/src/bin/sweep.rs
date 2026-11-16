@@ -56,8 +56,11 @@ fn message_for(response: Response) -> String {
 
 fn screen(session: &Session, message: &str) -> String {
     let progress = session.progress();
-    let status = format!("{} recorded, {} skipped because pressing them includes a chord you can't press, {} to go",
-                         progress.recorded, progress.skipped, progress.remaining);
+    let skipped = match progress.skipped {
+        0 => String::new(),
+        n => format!("{} skipped because pressing them includes a chord you can't press, ", n),
+    };
+    let status = format!("{} recorded, {}{} to go", progress.recorded, skipped, progress.remaining);
     let prompt = match session.step() {
         Step::Press(chord) => format!("Get the Twiddler to register this chord, in whichever way is easiest:\n\n{}\n\
                                        i  I can't press it\n\
