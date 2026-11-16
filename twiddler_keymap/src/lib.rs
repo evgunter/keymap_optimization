@@ -1,4 +1,5 @@
 pub mod chord;
+pub mod console;
 pub mod decode;
 pub mod deck;
 pub mod keystroke;

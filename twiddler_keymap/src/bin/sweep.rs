@@ -5,18 +5,16 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufReader, Write};
+use std::io::BufReader;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::mpsc;
 use std::time::SystemTime;
 
 use clap::Parser;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use crossterm::{cursor, execute, terminal};
 
+use twiddler_keymap::console::{render, spawn_inputs, Input, RawMode};
 use twiddler_keymap::deck::Deck;
-use twiddler_keymap::reader::{KeystrokeReader, ReadError, TimedKeystroke};
+use twiddler_keymap::reader::KeystrokeReader;
 use twiddler_keymap::sweep::{read_outcomes, write_record, Comfort, Command, Record, Response, Session, Step};
 
 #[derive(Parser)]
@@ -34,28 +32,15 @@ struct Args {
     skip_supersets: bool,
 }
 
-enum Input {
-    Twiddler(Result<Vec<TimedKeystroke>, ReadError>),
-    Terminal(io::Result<Event>),
-}
-
-enum Action {
-    Command(Command),
-    Quit,
-}
-
-fn action_for(key: KeyEvent) -> Option<Action> {
-    match key.code {
-        // in raw mode the terminal does not turn ctrl-c into an interrupt
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
-        KeyCode::Char('q') => Some(Action::Quit),
-        KeyCode::Char('i') => Some(Action::Command(Command::CannotPress)),
-        KeyCode::Char('n') => Some(Action::Command(Command::NotRegistered)),
-        KeyCode::Char('u') => Some(Action::Command(Command::Undo)),
-        KeyCode::Char('1') => Some(Action::Command(Command::Rate(Comfort::Comfortable))),
-        KeyCode::Char('2') => Some(Action::Command(Command::Rate(Comfort::Ok))),
-        KeyCode::Char('3') => Some(Action::Command(Command::Rate(Comfort::Awkward))),
-        KeyCode::Char('4') => Some(Action::Command(Command::Rate(Comfort::Painful))),
+fn command_for(character: char) -> Option<Command> {
+    match character {
+        'i' => Some(Command::CannotPress),
+        'n' => Some(Command::NotRegistered),
+        'u' => Some(Command::Undo),
+        '1' => Some(Command::Rate(Comfort::Comfortable)),
+        '2' => Some(Command::Rate(Comfort::Ok)),
+        '3' => Some(Command::Rate(Comfort::Awkward)),
+        '4' => Some(Command::Rate(Comfort::Painful)),
         _ => None,
     }
 }
@@ -93,31 +78,6 @@ fn screen(session: &Session, message: &str) -> String {
     format!("{}\n\n{}\n\n{}\n", status, prompt, message)
 }
 
-fn render(text: &str) -> io::Result<()> {
-    let mut stdout = io::stdout();
-    execute!(stdout, terminal::Clear(terminal::ClearType::All), cursor::MoveTo(0, 0))?;
-    // in raw mode a line feed does not return the cursor to the start of the line
-    write!(stdout, "{}", text.replace('\n', "\r\n"))?;
-    stdout.flush()
-}
-
-/// Keeps the terminal in raw mode, in which keys are delivered as they are typed, until dropped.
-struct RawMode;
-
-impl RawMode {
-    fn enable() -> io::Result<Self> {
-        terminal::enable_raw_mode()?;
-        Ok(RawMode)
-    }
-}
-
-impl Drop for RawMode {
-    fn drop(&mut self) {
-        // there is nowhere to report a failure to restore the terminal
-        let _ = terminal::disable_raw_mode();
-    }
-}
-
 fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let deck_file = File::open(&args.deck).map_err(|e| format!("failed to open deck {}: {}", args.deck.display(), e))?;
     let deck: Deck = serde_json::from_reader(BufReader::new(deck_file))?;
@@ -128,42 +88,19 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     };
     let mut results = OpenOptions::new().create(true).append(true).open(&args.results)
         .map_err(|e| format!("failed to open results {}: {}", args.results.display(), e))?;
-    let mut reader = KeystrokeReader::open(&args.device)
+    let reader = KeystrokeReader::open(&args.device)
         .map_err(|e| format!("failed to open device {}: {}", args.device.display(), e))?;
     let mut session = Session::new(deck, outcomes, args.skip_supersets);
 
-    // the Twiddler and the terminal are each read on their own thread, since both block
-    let (sender, receiver) = mpsc::channel();
-    let twiddler_sender = sender.clone();
-    std::thread::spawn(move || loop {
-        let keystrokes = reader.read();
-        let failed = keystrokes.is_err();
-        if twiddler_sender.send(Input::Twiddler(keystrokes)).is_err() || failed {
-            break;
-        }
-    });
-    std::thread::spawn(move || loop {
-        let event = event::read();
-        let failed = event.is_err();
-        if sender.send(Input::Terminal(event)).is_err() || failed {
-            break;
-        }
-    });
-
+    let inputs = spawn_inputs(reader);
     let _raw_mode = RawMode::enable()?;
     let mut message = String::new();
     loop {
         render(&screen(&session, &message))?;
-        let responses: Vec<Response> = match receiver.recv()? {
+        let responses: Vec<Response> = match inputs.recv()? {
+            Input::Quit => return Ok(()),
             Input::Twiddler(keystrokes) => keystrokes?.into_iter().map(|timed| session.handle_keystroke(timed.keystroke)).collect(),
-            Input::Terminal(event) => match event? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => match action_for(key) {
-                    Some(Action::Quit) => return Ok(()),
-                    Some(Action::Command(command)) => vec![session.handle_command(command)],
-                    None => Vec::new(),
-                },
-                _ => Vec::new(),
-            },
+            Input::Typed(character) => command_for(character?).map(|command| session.handle_command(command)).into_iter().collect(),
         };
         for response in responses {
             if let Response::Recorded(chord, outcome) = response {
