@@ -1,8 +1,9 @@
 //! Chords on a Twiddler 3: which buttons are held down together.
 //!
 //! The Twiddler has four thumb buttons (num, alt, ctrl, shift) and four rows of three finger buttons (left, middle,
-//! right), one row per finger. Only hand shapes worth considering are representable: each finger presses a
-//! contiguous run of the buttons in its row, and the thumb presses one button or two neighbouring ones.
+//! right), one row per finger. Only chords worth considering are representable: each finger presses a
+//! contiguous run of the buttons in its row, and the thumb presses at most one button. (The firmware does not
+//! look up chords with two thumb buttons: it sends a held modifier key instead of the chord's output.)
 
 use std::fmt;
 
@@ -53,9 +54,6 @@ pub enum ThumbState {
     Alt,
     Ctrl,
     Shift,
-    NumAlt,
-    AltCtrl,
-    CtrlShift,
 }
 
 impl ThumbState {
@@ -67,9 +65,6 @@ impl ThumbState {
             ThumbState::Alt => 0b0010,
             ThumbState::Ctrl => 0b0100,
             ThumbState::Shift => 0b1000,
-            ThumbState::NumAlt => 0b0011,
-            ThumbState::AltCtrl => 0b0110,
-            ThumbState::CtrlShift => 0b1100,
         }
     }
 }
@@ -130,6 +125,11 @@ impl Chord {
 
     pub fn n_buttons(&self) -> u32 {
         self.button_mask().count_ones()
+    }
+
+    /// Whether every button of `other` is also a button of this chord.
+    pub fn contains(&self, other: &Chord) -> bool {
+        self.button_mask() & other.button_mask() == other.button_mask()
     }
 }
 
@@ -192,6 +192,7 @@ mod tests {
         assert_eq!(chords.len(), ThumbState::VARIANTS.len() * n_finger_shapes);
         assert_eq!(chords.iter().collect::<HashSet<_>>().len(), chords.len());
         assert_eq!(chords.iter().filter(|chord| chord.thumb() == ThumbState::Lifted).count(), 2400);
+        assert_eq!(chords.len(), 12000);
     }
 
     #[test]
@@ -211,9 +212,9 @@ mod tests {
             (ThumbState::Lifted, [Lifted, Lifted, Lifted, R], 0x8000),
             (ThumbState::Lifted, [M, M, M, M], 0x4444),
             (ThumbState::Num, [M, Lifted, Lifted, Lifted], 0x0005),
-            (ThumbState::NumAlt, [M, Lifted, Lifted, Lifted], 0x0015),
-            (ThumbState::AltCtrl, [M, Lifted, Lifted, Lifted], 0x0114),
-            (ThumbState::CtrlShift, [M, Lifted, Lifted, Lifted], 0x1104),
+            (ThumbState::Alt, [M, Lifted, Lifted, Lifted], 0x0014),
+            (ThumbState::Ctrl, [M, Lifted, Lifted, Lifted], 0x0104),
+            (ThumbState::Shift, [M, Lifted, Lifted, Lifted], 0x1004),
         ];
         for (thumb, fingers, mask) in cases {
             assert_eq!(Chord::new(thumb, fingers).unwrap().button_mask(), mask, "{:?} {:?}", thumb, fingers);
@@ -222,13 +223,22 @@ mod tests {
 
     #[test]
     fn n_buttons_counts_thumb_and_finger_buttons() {
-        assert_eq!(Chord::new(ThumbState::NumAlt, [LMR, Lifted, M, Lifted]).unwrap().n_buttons(), 6);
+        assert_eq!(Chord::new(ThumbState::Num, [LMR, Lifted, M, Lifted]).unwrap().n_buttons(), 5);
+    }
+
+    #[test]
+    fn contains_compares_buttons() {
+        let small = Chord::new(ThumbState::Lifted, [L, Lifted, Lifted, Lifted]).unwrap();
+        let large = Chord::new(ThumbState::Num, [LM, Lifted, R, Lifted]).unwrap();
+        let other = Chord::new(ThumbState::Num, [M, Lifted, R, Lifted]).unwrap();
+        assert!(large.contains(&small) && large.contains(&large) && large.contains(&other));
+        assert!(!small.contains(&large) && !other.contains(&small));
     }
 
     #[test]
     fn display_draws_the_button_grid() {
-        let chord = Chord::new(ThumbState::AltCtrl, [L, Lifted, MR, LMR]).unwrap();
-        assert_eq!(chord.to_string(), "⚪⚫⚫⚪\n ⚫⚪⚪\n ⚪⚪⚪\n ⚪⚫⚫\n ⚫⚫⚫\n");
+        let chord = Chord::new(ThumbState::Ctrl, [L, Lifted, MR, LMR]).unwrap();
+        assert_eq!(chord.to_string(), "⚪⚪⚫⚪\n ⚫⚪⚪\n ⚪⚪⚪\n ⚪⚫⚫\n ⚫⚫⚫\n");
     }
 
     #[test]

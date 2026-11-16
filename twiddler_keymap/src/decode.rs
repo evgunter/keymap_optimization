@@ -31,8 +31,19 @@ pub enum KeyChange {
 }
 
 #[derive(Debug, PartialEq, thiserror::Error)]
-#[error("more than one non-modifier key was pressed at once, but each chord sends a single key")]
-pub struct MultipleKeysPressed;
+pub enum DecodeError {
+    #[error("more than one non-modifier key was pressed at once, but each chord sends a single key")]
+    MultipleKeysPressed,
+    #[error("evdev key code {0} is not a keyboard key")]
+    UnknownKey(u16),
+    #[error("evdev key event value {0} is not a press, release or repeat")]
+    UnknownValue(i32),
+}
+
+// values of evdev key events
+const EVDEV_RELEASE: i32 = 0;
+const EVDEV_PRESS: i32 = 1;
+const EVDEV_REPEAT: i32 = 2;
 
 /// Tracks which modifier keys are held, to recover the keystrokes sent by the Twiddler.
 #[derive(Default)]
@@ -41,9 +52,24 @@ pub struct KeystrokeDecoder {
 }
 
 impl KeystrokeDecoder {
-    /// Takes the key changes that the host received together (in evdev, the events up to a `SYN_REPORT`)
+    /// Takes the evdev key events (key code, value) that arrived together, i.e. up to one `SYN_REPORT`,
     /// and returns the keystroke they start, if any.
-    pub fn report(&mut self, changes: &[(HidKey, KeyChange)]) -> Result<Option<Keystroke>, MultipleKeysPressed> {
+    pub fn evdev_report(&mut self, key_events: &[(u16, i32)]) -> Result<Option<Keystroke>, DecodeError> {
+        let mut changes = Vec::new();
+        for (code, value) in key_events {
+            let change = match *value {
+                EVDEV_RELEASE => KeyChange::Release,
+                EVDEV_PRESS => KeyChange::Press,
+                // the host generates repeats for held keys; they are not changes
+                EVDEV_REPEAT => continue,
+                other => return Err(DecodeError::UnknownValue(other)),
+            };
+            changes.push((HidKey::from_evdev(*code).ok_or(DecodeError::UnknownKey(*code))?, change));
+        }
+        self.report(&changes)
+    }
+
+    fn report(&mut self, changes: &[(HidKey, KeyChange)]) -> Result<Option<Keystroke>, DecodeError> {
         // changes that arrive together describe a single state of the keyboard, so their order carries no meaning:
         // the modifiers that apply to a key are the ones held once all the changes have been applied
         let mut pressed_keys = Vec::new();
@@ -58,7 +84,7 @@ impl KeystrokeDecoder {
         match pressed_keys[..] {
             [] => Ok(None),
             [key] => Ok(Some(Keystroke { modifiers: self.modifiers, key })),
-            _ => Err(MultipleKeysPressed),
+            _ => Err(DecodeError::MultipleKeysPressed),
         }
     }
 }
@@ -115,6 +141,30 @@ mod tests {
 
     #[test]
     fn two_keys_at_once_are_an_error() {
-        assert_eq!(KeystrokeDecoder::default().report(&[(A, Press), (B, Press)]), Err(MultipleKeysPressed));
+        assert_eq!(KeystrokeDecoder::default().report(&[(A, Press), (B, Press)]), Err(DecodeError::MultipleKeysPressed));
+    }
+
+    #[test]
+    fn evdev_events_recorded_from_the_twiddler_decode() {
+        // a chord sending right ctrl + s: KEY_RIGHTCTRL and KEY_S are pressed in one report and released in the next
+        const KEY_RIGHTCTRL: u16 = 97;
+        const KEY_S: u16 = 31;
+        let mut decoder = KeystrokeDecoder::default();
+        assert_eq!(decoder.evdev_report(&[(KEY_RIGHTCTRL, 1), (KEY_S, 1)]), Ok(Some(Keystroke { modifiers: 0x10, key: 0x16 })));
+        assert_eq!(decoder.evdev_report(&[(KEY_RIGHTCTRL, 0), (KEY_S, 0)]), Ok(None));
+        assert_eq!(decoder.evdev_report(&[(KEY_S, 1)]), Ok(Some(Keystroke { modifiers: 0, key: 0x16 })));
+    }
+
+    #[test]
+    fn evdev_repeats_are_ignored() {
+        let mut decoder = KeystrokeDecoder::default();
+        assert_eq!(decoder.evdev_report(&[(30, 2)]), Ok(None));
+    }
+
+    #[test]
+    fn unexpected_evdev_events_are_errors() {
+        let mut decoder = KeystrokeDecoder::default();
+        assert_eq!(decoder.evdev_report(&[(0x110, 1)]), Err(DecodeError::UnknownKey(0x110)));
+        assert_eq!(decoder.evdev_report(&[(30, 3)]), Err(DecodeError::UnknownValue(3)));
     }
 }
