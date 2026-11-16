@@ -15,7 +15,8 @@ use clap::Parser;
 use twiddler_keymap::console::{render, spawn_inputs, Input, RawMode};
 use twiddler_keymap::deck::Deck;
 use twiddler_keymap::reader::KeystrokeReader;
-use twiddler_keymap::sweep::{read_outcomes, write_record, Comfort, Command, Record, Response, Session, Step};
+use twiddler_keymap::results::{append_record, read_records};
+use twiddler_keymap::sweep::{outcomes, Comfort, Command, Record, Response, Session, Step};
 
 #[derive(Parser)]
 #[command(about = "Record which chords of a deck can be pressed, and how comfortably")]
@@ -85,7 +86,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let deck_file = File::open(&args.deck).map_err(|e| format!("failed to open deck {}: {}", args.deck.display(), e))?;
     let deck: Deck = serde_json::from_reader(BufReader::new(deck_file))?;
     let outcomes = if args.results.exists() {
-        read_outcomes(BufReader::new(File::open(&args.results)?))?
+        outcomes(&read_records::<Record>(BufReader::new(File::open(&args.results)?))?)
     } else {
         HashMap::new()
     };
@@ -107,7 +108,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         };
         for response in responses {
             if let Response::Recorded(chord, outcome) = response {
-                write_record(&mut results, &Record { chord, outcome, time: SystemTime::now() })?;
+                append_record(&mut results, &Record { chord, outcome, time: SystemTime::now() })?;
             }
             message = message_for(response);
         }

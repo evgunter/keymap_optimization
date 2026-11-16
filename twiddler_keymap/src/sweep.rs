@@ -5,7 +5,6 @@
 //! so an outcome describes the easiest way of pressing the chord.
 
 use std::collections::HashMap;
-use std::io::{self, BufRead, Write};
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
@@ -14,7 +13,8 @@ use crate::chord::Chord;
 use crate::deck::Deck;
 use crate::keystroke::Keystroke;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+/// How comfortable a chord is to press, from best to worst.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 pub enum Comfort {
     Comfortable,
     Ok,
@@ -39,31 +39,9 @@ pub struct Record {
     pub time: SystemTime,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum ResultsError {
-    #[error("failed to read results: {0}")]
-    Io(#[from] io::Error),
-    #[error("malformed record in results: {0}")]
-    Json(#[from] serde_json::Error),
-}
-
-/// Reads results written by `write_record`. If a chord has several records, the last one counts.
-pub fn read_outcomes(results: impl BufRead) -> Result<HashMap<Chord, Outcome>, ResultsError> {
-    let mut outcomes = HashMap::new();
-    for line in results.lines() {
-        let record: Record = serde_json::from_str(&line?)?;
-        outcomes.insert(record.chord, record.outcome);
-    }
-    Ok(outcomes)
-}
-
-/// Appends a record as one line of JSON.
-pub fn write_record(results: &mut impl Write, record: &Record) -> io::Result<()> {
-    // written in one piece, so that being killed mid-write is unlikely to leave part of a record behind
-    let mut line = serde_json::to_string(record)?;
-    line.push('\n');
-    results.write_all(line.as_bytes())?;
-    results.flush()
+/// The outcome of each chord in the records. If a chord has several records, the last one counts.
+pub fn outcomes(records: &[Record]) -> HashMap<Chord, Outcome> {
+    records.iter().map(|record| (record.chord, record.outcome)).collect()
 }
 
 /// What the session is waiting for.
@@ -336,18 +314,19 @@ mod tests {
     }
 
     #[test]
-    fn results_round_trip_and_later_records_replace_earlier_ones() {
+    fn later_records_replace_earlier_ones() {
         let (_, chords, _) = deck();
-        let mut results = Vec::new();
-        for (chord, outcome) in [(chords[0], Outcome::CannotPress), (chords[1], Outcome::NotRegistered), (chords[0], Outcome::Pressed(Comfort::Awkward))] {
-            write_record(&mut results, &Record { chord, outcome, time: SystemTime::now() }).unwrap();
-        }
-        let outcomes = read_outcomes(results.as_slice()).unwrap();
-        assert_eq!(outcomes, HashMap::from([(chords[0], Outcome::Pressed(Comfort::Awkward)), (chords[1], Outcome::NotRegistered)]));
+        let records = [(chords[0], Outcome::CannotPress), (chords[1], Outcome::NotRegistered), (chords[0], Outcome::Pressed(Comfort::Awkward))]
+            .map(|(chord, outcome)| Record { chord, outcome, time: SystemTime::now() });
+        assert_eq!(outcomes(&records), HashMap::from([(chords[0], Outcome::Pressed(Comfort::Awkward)), (chords[1], Outcome::NotRegistered)]));
     }
 
     #[test]
-    fn malformed_results_are_an_error() {
-        assert!(matches!(read_outcomes("not a record\n".as_bytes()), Err(ResultsError::Json(_))));
+    fn records_survive_a_results_file() {
+        let (_, chords, _) = deck();
+        let record = Record { chord: chords[0], outcome: Outcome::Pressed(Comfort::Ok), time: SystemTime::now() };
+        let mut results = Vec::new();
+        crate::results::append_record(&mut results, &record).unwrap();
+        assert_eq!(crate::results::read_records::<Record>(results.as_slice()).unwrap(), [record]);
     }
 }
