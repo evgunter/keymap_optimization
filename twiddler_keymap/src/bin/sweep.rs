@@ -28,9 +28,10 @@ struct Args {
     deck: PathBuf,
     /// The file results are appended to; use the same one for every deck
     results: PathBuf,
-    /// Also ask about chords that cannot be pressed without pressing a chord already marked as impossible
+    /// Leave out chords that cannot be pressed without pressing a chord already marked as impossible.
+    /// This can leave out chords that are pressable, since an extra button sometimes makes a shape easier
     #[arg(long)]
-    include_supersets: bool,
+    skip_supersets: bool,
 }
 
 enum Input {
@@ -129,7 +130,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         .map_err(|e| format!("failed to open results {}: {}", args.results.display(), e))?;
     let mut reader = KeystrokeReader::open(&args.device)
         .map_err(|e| format!("failed to open device {}: {}", args.device.display(), e))?;
-    let mut session = Session::new(deck, outcomes, !args.include_supersets);
+    let mut session = Session::new(deck, outcomes, args.skip_supersets);
 
     // the Twiddler and the terminal are each read on their own thread, since both block
     let (sender, receiver) = mpsc::channel();
