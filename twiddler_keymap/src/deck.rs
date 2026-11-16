@@ -18,9 +18,12 @@ pub enum DeckError {
     TooManyChords(usize),
     #[error("a deck cannot contain the same chord twice")]
     DuplicateChord,
+    #[error("a deck cannot contain {0:?}, because the Twiddler sees it as a different chord")]
+    NotRegistrable(Chord),
 }
 
-/// Distinct chords, few enough to fit in one Twiddler config. The chord at position `i` sends keystroke `i`.
+/// Distinct chords that the Twiddler can see, few enough to fit in one config.
+/// The chord at position `i` sends keystroke `i`.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(try_from = "Vec<Chord>", into = "Vec<Chord>")]
 pub struct Deck {
@@ -33,6 +36,8 @@ impl Deck {
             Err(DeckError::TooManyChords(chords.len()))
         } else if chords.iter().collect::<HashSet<_>>().len() != chords.len() {
             Err(DeckError::DuplicateChord)
+        } else if let Some(chord) = chords.iter().find(|chord| !chord.registers_as_itself()) {
+            Err(DeckError::NotRegistrable(*chord))
         } else {
             Ok(Deck { chords })
         }
@@ -106,7 +111,9 @@ mod tests {
     use twidlk_rust::twiddler_config::read_config;
 
     fn chords(n: usize) -> Vec<Chord> {
-        Chord::all().take(n).collect()
+        let chords: Vec<Chord> = Chord::all().filter(Chord::registers_as_itself).take(n).collect();
+        assert_eq!(chords.len(), n);
+        chords
     }
 
     #[test]
@@ -120,6 +127,12 @@ mod tests {
         let mut with_duplicate = chords(3);
         with_duplicate.push(with_duplicate[0]);
         assert_eq!(Deck::new(with_duplicate), Err(DeckError::DuplicateChord));
+    }
+
+    #[test]
+    fn chords_that_register_as_others_are_rejected() {
+        let ghosting = Chord::all().find(|chord| !chord.registers_as_itself()).unwrap();
+        assert_eq!(Deck::new(vec![ghosting]), Err(DeckError::NotRegistrable(ghosting)));
     }
 
     #[test]

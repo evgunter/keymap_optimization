@@ -4,7 +4,12 @@
 //! right), one row per finger. Only chords worth considering are representable: each finger presses a
 //! contiguous run of the buttons in its row, and the thumb presses at most one button. (The firmware does not
 //! look up chords with two thumb buttons: it sends a held modifier key instead of the chord's output.)
+//!
+//! The finger buttons are read as a matrix, so the Twiddler cannot always tell which of them are pressed: when
+//! three corners of a rectangle of buttons are pressed, it sees the fourth as pressed too. A chord therefore
+//! *registers as* a possibly larger chord, and only chords that register as themselves can be given an output.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use itertools::Itertools;
@@ -43,6 +48,10 @@ impl FingerState {
             FingerState::MR => 0b110,
             FingerState::LMR => 0b111,
         }
+    }
+
+    fn from_column_bits(bits: u16) -> Option<FingerState> {
+        FingerState::VARIANTS.iter().copied().find(|state| state.column_bits() == bits)
     }
 }
 
@@ -130,6 +139,40 @@ impl Chord {
     /// Whether every button of `other` is also a button of this chord.
     pub fn contains(&self, other: &Chord) -> bool {
         self.button_mask() & other.button_mask() == other.button_mask()
+    }
+
+    /// The chord the Twiddler sees when this one is pressed.
+    pub fn registers_as(&self) -> Chord {
+        // two fingers that share a column cannot be told apart, so each is seen pressing the buttons of both
+        let mut fingers = self.fingers;
+        loop {
+            let mut changed = false;
+            for i in 0..N_FINGERS {
+                for j in 0..N_FINGERS {
+                    let (columns_i, columns_j) = (fingers[i].column_bits(), fingers[j].column_bits());
+                    if columns_i & columns_j != 0 && columns_i != columns_j {
+                        let merged = FingerState::from_column_bits(columns_i | columns_j)
+                            .expect("contiguous runs of buttons that overlap combine into a contiguous run");
+                        fingers[i] = merged;
+                        fingers[j] = merged;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                return Chord { thumb: self.thumb, fingers };
+            }
+        }
+    }
+
+    /// Whether the Twiddler sees exactly this chord when it is pressed.
+    pub fn registers_as_itself(&self) -> bool {
+        self.registers_as() == *self
+    }
+
+    /// For each chord the Twiddler can see, the ways of pressing it: the chords that register as it.
+    pub fn fingerings() -> HashMap<Chord, Vec<Chord>> {
+        Chord::all().into_group_map_by(|chord| chord.registers_as())
     }
 }
 
@@ -233,6 +276,55 @@ mod tests {
         let other = Chord::new(ThumbState::Num, [M, Lifted, R, Lifted]).unwrap();
         assert!(large.contains(&small) && large.contains(&large) && large.contains(&other));
         assert!(!small.contains(&large) && !other.contains(&small));
+    }
+
+    #[test]
+    fn rectangles_of_buttons_register_with_all_four_corners() {
+        let cases = [
+            // two in a row and one of their columns in another row
+            ([LM, L, Lifted, Lifted], [LM, LM, Lifted, Lifted]),
+            ([Lifted, M, Lifted, MR], [Lifted, MR, Lifted, MR]),
+            // two in a row and only the other column elsewhere
+            ([LM, R, R, Lifted], [LM, R, R, Lifted]),
+            // three in a row and anything else
+            ([LMR, Lifted, M, Lifted], [LMR, Lifted, LMR, Lifted]),
+            // fingers linked through a third
+            ([L, LM, M, R], [LM, LM, LM, R]),
+            ([L, LM, MR, R], [LMR, LMR, LMR, LMR]),
+            // one button per finger
+            ([L, L, M, R], [L, L, M, R]),
+        ];
+        for (pressed, seen) in cases {
+            let pressed = Chord::new(ThumbState::Shift, pressed).unwrap();
+            assert_eq!(pressed.registers_as(), Chord::new(ThumbState::Shift, seen).unwrap(), "{:?}", pressed);
+        }
+    }
+
+    #[test]
+    fn registering_twice_changes_nothing_more() {
+        for chord in Chord::all() {
+            assert!(chord.registers_as().registers_as_itself(), "{:?}", chord);
+            assert!(chord.registers_as().contains(&chord), "{:?}", chord);
+        }
+    }
+
+    #[test]
+    fn fingerings_group_all_chords_by_what_they_register_as() {
+        let fingerings = Chord::fingerings();
+        assert_eq!(fingerings.len(), ThumbState::VARIANTS.len() * 400);
+        assert_eq!(fingerings.values().map(Vec::len).sum::<usize>(), Chord::all().count());
+        assert!(fingerings.iter().all(|(seen, pressed)| seen.registers_as_itself() && pressed.contains(seen)));
+
+        let square = Chord::new(ThumbState::Lifted, [LM, LM, Lifted, Lifted]).unwrap();
+        let mut ways: Vec<[FingerState; N_FINGERS]> = fingerings[&square].iter().map(|chord| chord.fingers()).collect();
+        ways.sort_by_key(|fingers| fingers.map(|finger| finger.column_bits()));
+        assert_eq!(ways, [
+            [L, LM, Lifted, Lifted],
+            [M, LM, Lifted, Lifted],
+            [LM, L, Lifted, Lifted],
+            [LM, M, Lifted, Lifted],
+            [LM, LM, Lifted, Lifted],
+        ]);
     }
 
     #[test]

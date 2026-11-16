@@ -1,5 +1,8 @@
 //! The feasibility sweep: going through a deck and recording, for each chord, whether it can be pressed and how
 //! comfortable it is.
+//!
+//! A chord counts as pressed when the Twiddler sees it, however it was pressed (see `Chord::registers_as`),
+//! so an outcome describes the easiest way of pressing the chord.
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
@@ -23,7 +26,7 @@ pub enum Comfort {
 pub enum Outcome {
     /// The chord was pressed and the Twiddler sent its keystroke.
     Pressed(Comfort),
-    /// The hand cannot form the chord.
+    /// The hand cannot form the chord, in any of the ways of pressing it.
     CannotPress,
     /// The chord was pressed, but the Twiddler did not send its keystroke.
     NotRegistered,
@@ -100,7 +103,7 @@ pub enum Response {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Progress {
     pub recorded: usize,
-    /// Chords left out because they contain a chord that cannot be pressed.
+    /// Chords left out because every way of pressing them includes a way of pressing a chord that cannot be pressed.
     pub skipped: usize,
     pub remaining: usize,
 }
@@ -110,8 +113,9 @@ pub struct Session {
     deck: Deck,
     /// The outcomes known so far, including those of chords outside the deck.
     outcomes: HashMap<Chord, Outcome>,
-    /// Whether to skip chords that contain a chord that cannot be pressed.
+    /// Whether to skip chords that cannot be pressed without pressing a chord already found impossible.
     skip_supersets: bool,
+    fingerings: HashMap<Chord, Vec<Chord>>,
     /// The chords recorded in this session, oldest first.
     history: Vec<Chord>,
     step: Step,
@@ -119,7 +123,7 @@ pub struct Session {
 
 impl Session {
     pub fn new(deck: Deck, outcomes: HashMap<Chord, Outcome>, skip_supersets: bool) -> Self {
-        let mut session = Session { deck, outcomes, skip_supersets, history: Vec::new(), step: Step::Finished };
+        let mut session = Session { deck, outcomes, skip_supersets, fingerings: Chord::fingerings(), history: Vec::new(), step: Step::Finished };
         session.step = session.next_step();
         session
     }
@@ -128,19 +132,36 @@ impl Session {
         self.step
     }
 
-    fn is_skipped(&self, chord: &Chord) -> bool {
-        self.skip_supersets && self.outcomes.iter().any(|(other, outcome)| *outcome == Outcome::CannotPress && chord.contains(other))
+    /// The ways of pressing a chord, including ones the Twiddler sees as a different chord.
+    fn ways_of_pressing<'a>(&'a self, chord: &'a Chord) -> &'a [Chord] {
+        // a chord that registers as another one is not among the keys; the only way of pressing it is itself
+        self.fingerings.get(chord).map_or(std::slice::from_ref(chord), Vec::as_slice)
+    }
+
+    /// The hand shapes known to be impossible: every way of pressing a chord that cannot be pressed.
+    fn impossible_shapes(&self) -> Vec<Chord> {
+        self.outcomes.iter()
+            .filter(|(_, outcome)| **outcome == Outcome::CannotPress)
+            .flat_map(|(chord, _)| self.ways_of_pressing(chord))
+            .copied()
+            .collect()
+    }
+
+    fn is_skipped(&self, chord: &Chord, impossible_shapes: &[Chord]) -> bool {
+        self.skip_supersets && self.ways_of_pressing(chord).iter().all(|way| impossible_shapes.iter().any(|shape| way.contains(shape)))
     }
 
     fn next_step(&self) -> Step {
+        let impossible_shapes = self.impossible_shapes();
         self.deck.chords().iter()
-            .find(|chord| !self.outcomes.contains_key(chord) && !self.is_skipped(chord))
+            .find(|chord| !self.outcomes.contains_key(chord) && !self.is_skipped(chord, &impossible_shapes))
             .map_or(Step::Finished, |chord| Step::Press(*chord))
     }
 
     pub fn progress(&self) -> Progress {
+        let impossible_shapes = self.impossible_shapes();
         let unrecorded: Vec<&Chord> = self.deck.chords().iter().filter(|chord| !self.outcomes.contains_key(chord)).collect();
-        let skipped = unrecorded.iter().filter(|chord| self.is_skipped(chord)).count();
+        let skipped = unrecorded.iter().filter(|chord| self.is_skipped(chord, &impossible_shapes)).count();
         Progress { recorded: self.deck.chords().len() - unrecorded.len(), skipped, remaining: unrecorded.len() - skipped }
     }
 
@@ -236,6 +257,25 @@ mod tests {
         assert_eq!(session.handle_command(Command::NotRegistered), Response::Recorded(chords[1], Outcome::NotRegistered));
         assert_eq!(session.step(), Step::Finished);
         assert_eq!(session.progress(), Progress { recorded: 2, skipped: 1, remaining: 0 });
+    }
+
+    #[test]
+    fn a_chord_is_skipped_only_if_every_way_of_pressing_it_is_impossible() {
+        let square = chord([LM, LM, Lifted, Lifted]);
+        let deck = Deck::new(vec![square]).unwrap();
+        let skipped = |impossible: &[Chord]| {
+            let outcomes = impossible.iter().map(|chord| (*chord, Outcome::CannotPress)).collect();
+            Session::new(deck.clone(), outcomes, true).step() == Step::Finished
+        };
+
+        // the square can still be pressed as [LM, M], which does not include [L, L]
+        assert!(!skipped(&[chord([L, L, Lifted, Lifted])]));
+        // a chord the Twiddler sees as another one stands for that hand shape only
+        let three_corners = [chord([LM, L, Lifted, Lifted]), chord([LM, M, Lifted, Lifted]), chord([L, LM, Lifted, Lifted])];
+        assert!(!skipped(&three_corners));
+        // every way of pressing the square includes one of these
+        assert!(skipped(&[three_corners[0], three_corners[1], three_corners[2], chord([M, LM, Lifted, Lifted])]));
+        assert!(skipped(&[chord([L, L, Lifted, Lifted]), chord([M, M, Lifted, Lifted])]));
     }
 
     #[test]

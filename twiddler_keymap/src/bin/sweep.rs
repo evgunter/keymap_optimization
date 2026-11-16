@@ -28,7 +28,7 @@ struct Args {
     deck: PathBuf,
     /// The file results are appended to; use the same one for every deck
     results: PathBuf,
-    /// Also ask about chords that contain a chord already marked as impossible to press
+    /// Also ask about chords that cannot be pressed without pressing a chord already marked as impossible
     #[arg(long)]
     include_supersets: bool,
 }
@@ -70,10 +70,10 @@ fn message_for(response: Response) -> String {
 
 fn screen(session: &Session, message: &str) -> String {
     let progress = session.progress();
-    let status = format!("{} recorded, {} skipped because they contain a chord you can't press, {} to go",
+    let status = format!("{} recorded, {} skipped because pressing them includes a chord you can't press, {} to go",
                          progress.recorded, progress.skipped, progress.remaining);
     let prompt = match session.step() {
-        Step::Press(chord) => format!("Press this chord on the Twiddler:\n\n{}\n\
+        Step::Press(chord) => format!("Get the Twiddler to register this chord, in whichever way is easiest:\n\n{}\n\
                                        i  I can't press it\n\
                                        n  I pressed it, but it didn't register\n\
                                        u  go back to the previous chord\n\
