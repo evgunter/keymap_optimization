@@ -1,6 +1,6 @@
 // Chooses the pairs of chords to time from the results of the feasibility sweep. Writes the plan (the pairs, in
 // random order) and a deck holding every chord the plan uses, whose config must be loaded onto the Twiddler for
-// timing.
+// timing. The deck's spare room is filled with other chords, so that mistakes can be recognised.
 
 use std::error::Error;
 use std::fs::File;
@@ -9,15 +9,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
-use itertools::Itertools;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-use twiddler_keymap::chord::Chord;
 use twiddler_keymap::deck::Deck;
 use twiddler_keymap::results::read_records;
 use twiddler_keymap::sweep::{outcomes, Record};
-use twiddler_keymap::timing_plan::{plan, references};
+use twiddler_keymap::timing_plan::{deck_chords, plan, references};
 
 #[derive(Parser)]
 #[command(about = "Choose the pairs of chords to time, from the results of the feasibility sweep")]
@@ -44,8 +42,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let outcomes = outcomes(&records);
     let trials = plan(&outcomes, &mut StdRng::seed_from_u64(args.seed))?;
 
-    let chords: Vec<Chord> = trials.iter().flatten().copied().unique().sorted_by_key(|chord| (chord.n_buttons(), chord.button_mask())).collect();
-    let deck = Deck::new(chords)?;
+    let deck = Deck::new(deck_chords(&trials))?;
     let plan_path = args.out_dir.join("timing_plan.json");
     std::fs::write(&plan_path, serde_json::to_string(&trials)?)?;
     let [config_path, deck_path] = deck.write_files(&args.out_dir, "timing_deck")?;
@@ -54,8 +51,8 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     for reference in references(&outcomes)? {
         println!("{}", reference);
     }
-    println!("{}: {} trials over {} chords", plan_path.display(), trials.len(), deck.chords().len());
-    println!("{} and {}: the deck for these trials", config_path.display(), deck_path.display());
+    println!("{}: {} trials", plan_path.display(), trials.len());
+    println!("{} and {}: the deck for these trials, {} chords", config_path.display(), deck_path.display(), deck.chords().len());
     Ok(())
 }
 
