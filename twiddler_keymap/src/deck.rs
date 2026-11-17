@@ -1,6 +1,8 @@
 //! A deck is the set of chords loaded onto the Twiddler for one data collection session.
 
 use std::collections::HashSet;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use twidlk_rust::twiddler_config::{generate_bin_config, sort_chords, ChordOutput, ChordWithOutput, TwiddlerConfig};
@@ -88,6 +90,15 @@ impl Deck {
             chords,
         };
         generate_bin_config(&config).expect("writing a config to memory cannot fail")
+    }
+
+    /// Writes `<name>.cfg`, the config to load onto the Twiddler, and `<name>.json`, the deck itself, which the
+    /// programs that read the Twiddler need in order to interpret that config's keystrokes.
+    pub fn write_files(&self, directory: &Path, name: &str) -> io::Result<[PathBuf; 2]> {
+        let paths = ["cfg", "json"].map(|extension| directory.join(format!("{}.{}", name, extension)));
+        std::fs::write(&paths[0], self.config())?;
+        std::fs::write(&paths[1], serde_json::to_string(self)?)?;
+        Ok(paths)
     }
 }
 

@@ -62,10 +62,7 @@ fn thumb_chords(rng: &mut StdRng) -> Vec<Chord> {
 fn write_deck(out_dir: &Path, name: &str, chords: Vec<Chord>) {
     let n_buttons = chords.iter().map(|chord| chord.n_buttons()).minmax().into_option().expect("decks are not empty");
     let deck = Deck::new(chords).expect("the chords of a deck are distinct, registrable, and few enough for one config");
-    let config_path = out_dir.join(format!("{}.cfg", name));
-    let deck_path = out_dir.join(format!("{}.json", name));
-    std::fs::write(&config_path, deck.config()).expect("failed to write config");
-    std::fs::write(&deck_path, serde_json::to_string(&deck).expect("failed to serialize deck")).expect("failed to write deck");
+    let [config_path, deck_path] = deck.write_files(out_dir, name).expect("failed to write deck");
     println!("{} and {}: {} chords with {} to {} buttons", config_path.display(), deck_path.display(),
              deck.chords().len(), n_buttons.0, n_buttons.1);
 }

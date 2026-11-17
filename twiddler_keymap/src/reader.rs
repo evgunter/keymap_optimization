@@ -2,7 +2,7 @@
 
 use std::io;
 use std::path::Path;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use evdev::{Device, EventSummary, SynchronizationCode};
 
@@ -11,9 +11,12 @@ use crate::keystroke::Keystroke;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TimedKeystroke {
-    // TODO: this is the system clock, which can be adjusted while we are measuring.
-    // intervals between keystrokes should come from a monotonic clock (evdev supports one via EVIOCSCLOCKID).
+    /// When the kernel received the keystroke. This is precise, but it is the system clock, which can be
+    /// adjusted while we are measuring.
     pub time: SystemTime,
+    /// When this program received the keystroke: later than `time` by a varying delay, but on a clock that
+    /// only runs forwards, so it can be used to check intervals measured with `time`.
+    pub received: Instant,
     pub keystroke: Keystroke,
 }
 
@@ -44,14 +47,16 @@ impl KeystrokeReader {
     /// Waits until the device sends events, then returns the keystrokes among them (possibly none).
     pub fn read(&mut self) -> Result<Vec<TimedKeystroke>, ReadError> {
         let mut keystrokes = Vec::new();
-        for event in self.device.fetch_events()? {
+        let events = self.device.fetch_events()?;
+        let received = Instant::now();
+        for event in events {
             let time = event.timestamp();
             match event.destructure() {
                 EventSummary::Key(_, key, value) => self.report.push((key.code(), value)),
                 EventSummary::Synchronization(_, SynchronizationCode::SYN_REPORT, _) => {
                     let report = std::mem::take(&mut self.report);
                     if let Some(keystroke) = self.decoder.evdev_report(&report)? {
-                        keystrokes.push(TimedKeystroke { time, keystroke });
+                        keystrokes.push(TimedKeystroke { time, received, keystroke });
                     }
                 }
                 _ => (),
