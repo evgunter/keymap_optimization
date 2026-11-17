@@ -33,10 +33,13 @@ struct Args {
 }
 
 fn run(args: Args) -> Result<(), Box<dyn Error>> {
+    if !args.out_dir.is_dir() {
+        return Err(format!("{} is not a directory; the output directory comes first, then the sweep results", args.out_dir.display()).into());
+    }
     let mut records: Vec<Record> = Vec::new();
     for path in &args.sweep_results {
         let results = File::open(path).map_err(|e| format!("failed to open {}: {}", path.display(), e))?;
-        records.extend(read_records::<Record>(BufReader::new(results))?);
+        records.extend(read_records::<Record>(BufReader::new(results)).map_err(|e| format!("{}: {}", path.display(), e))?);
     }
     let outcomes = outcomes(&records);
     let trials = plan(&outcomes, &mut StdRng::seed_from_u64(args.seed))?;
