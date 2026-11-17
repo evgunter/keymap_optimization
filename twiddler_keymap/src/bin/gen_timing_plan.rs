@@ -1,6 +1,6 @@
 // Chooses the pairs of chords to time from the results of the feasibility sweep. Writes the plan (the pairs, in
-// random order) and a deck holding every chord the plan uses, whose config must be loaded onto the Twiddler for
-// timing. The deck's spare room is filled with other chords, so that mistakes can be recognised.
+// random order) and the deck to load onto the Twiddler for timing, which identifies every chord the Twiddler
+// can see, so that mistakes can be recognised whatever they are.
 
 use std::error::Error;
 use std::fs::File;
@@ -15,7 +15,7 @@ use rand::SeedableRng;
 use twiddler_keymap::deck::Deck;
 use twiddler_keymap::results::read_records;
 use twiddler_keymap::sweep::{outcomes, Record};
-use twiddler_keymap::timing_plan::{deck_chords, plan, references};
+use twiddler_keymap::timing_plan::{plan, references};
 
 #[derive(Parser)]
 #[command(about = "Choose the pairs of chords to time, from the results of the feasibility sweep")]
@@ -42,7 +42,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let outcomes = outcomes(&records);
     let trials = plan(&outcomes, &mut StdRng::seed_from_u64(args.seed))?;
 
-    let deck = Deck::new(deck_chords(&trials))?;
+    let deck = Deck::full();
     let plan_path = args.out_dir.join("timing_plan.json");
     std::fs::write(&plan_path, serde_json::to_string(&trials)?)?;
     let [config_path, deck_path] = deck.write_files(&args.out_dir, "timing_deck")?;
@@ -52,7 +52,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         println!("{}", reference);
     }
     println!("{}: {} trials", plan_path.display(), trials.len());
-    println!("{} and {}: the deck for these trials, {} chords", config_path.display(), deck_path.display(), deck.chords().len());
+    println!("{} and {}: the deck for timing, which identifies every chord", config_path.display(), deck_path.display());
     Ok(())
 }
 

@@ -41,7 +41,7 @@ const CLOCK_TOLERANCE: Duration = Duration::from_millis(20);
 /// One chord arriving during a timed run.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Press {
-    /// The chord that arrived; `None` for a keystroke that no chord in the deck sends.
+    /// The chord that arrived; `None` for a keystroke that the deck cannot identify.
     pub chord: Option<Chord>,
     /// Seconds since the first press of the run.
     pub seconds: f64,
@@ -116,8 +116,8 @@ pub fn median(values: &[f64]) -> Option<f64> {
 pub enum SessionError {
     #[error("trial {0} of the plan alternates a chord with itself")]
     SameChordTwice(usize),
-    #[error("the plan uses {0:?}, which is not in the deck")]
-    ChordNotInDeck(Chord),
+    #[error("the plan uses {0:?}, which the deck cannot identify")]
+    ChordNotIdentified(Chord),
     #[error("record {0} of the results does not continue the plan; are these the results of a different plan?")]
     ResultsDoNotMatchPlan(usize),
 }
@@ -138,7 +138,7 @@ pub enum Step {
 /// A chord that arrived in a run when a different one was awaited.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Mistake {
-    /// The chord that arrived; `None` for a keystroke that no chord in the deck sends.
+    /// The chord that arrived; `None` for a keystroke that the deck cannot identify.
     pub registered: Option<Chord>,
 }
 
@@ -187,8 +187,8 @@ impl Session {
             if pair[0] == pair[1] {
                 return Err(SessionError::SameChordTwice(index));
             }
-            if let Some(chord) = pair.iter().find(|chord| !deck.chords().contains(chord)) {
-                return Err(SessionError::ChordNotInDeck(*chord));
+            if let Some(chord) = pair.iter().find(|chord| !deck.identifies(chord)) {
+                return Err(SessionError::ChordNotIdentified(*chord));
             }
         }
         // every attempt is at the first trial that has no accepted attempt yet
@@ -523,7 +523,7 @@ mod tests {
         let [a, b, _] = chords();
         assert_eq!(Session::new(deck(), vec![[a, a]], &[]).err(), Some(SessionError::SameChordTwice(0)));
         let small_deck = Deck::new(vec![a]).unwrap();
-        assert_eq!(Session::new(small_deck, vec![[a, b]], &[]).err(), Some(SessionError::ChordNotInDeck(b)));
+        assert_eq!(Session::new(small_deck, vec![[a, b]], &[]).err(), Some(SessionError::ChordNotIdentified(b)));
     }
 
     #[test]

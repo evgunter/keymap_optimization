@@ -51,7 +51,7 @@ fn side_by_side(pair: &[Chord; 2]) -> String {
 fn message_for(response: &Response, pair: Option<[Chord; 2]>) -> String {
     match response {
         Response::Moved | Response::Ended(_) | Response::Ignored => String::new(),
-        Response::Practised(None) => "The Twiddler sent a keystroke that no chord in this deck sends. Is this deck's config loaded?".to_string(),
+        Response::Practised(None) => "The Twiddler sent a keystroke this deck can't identify. Two thumb buttons, or is another config loaded?".to_string(),
         Response::Practised(Some(chord)) => match pair.map(|pair| pair.iter().position(|expected| expected == chord)) {
             Some(Some(0)) => "That was the left chord.".to_string(),
             Some(Some(_)) => "That was the right chord.".to_string(),
@@ -82,7 +82,7 @@ fn describe_run(pair: &[Chord; 2], n_correct: usize, mistake: Option<Mistake>) -
     let next = format!("Next: the {} chord.", if n_correct.is_multiple_of(2) { "LEFT" } else { "RIGHT" });
     match mistake {
         None => next,
-        Some(Mistake { registered: None }) => format!("WRONG: that keystroke is not one this deck sends. {}", next),
+        Some(Mistake { registered: None }) => format!("WRONG: this deck can't identify that keystroke. {}", next),
         Some(Mistake { registered: Some(chord) }) => {
             let which = match pair.iter().position(|expected| *expected == chord) {
                 Some(0) => "the left chord again".to_string(),
@@ -197,6 +197,6 @@ mod tests {
         assert_eq!(describe_run(&pair, 3, None), "Next: the RIGHT chord.");
         assert_eq!(describe_run(&pair, 1, Some(Mistake { registered: Some(pair[0]) })), "WRONG: that registered as the left chord again\nNext: the RIGHT chord.");
         assert_eq!(describe_run(&pair, 2, Some(Mistake { registered: Some(other) })), format!("WRONG: that registered as this:\n\n{}\nNext: the LEFT chord.", other));
-        assert!(describe_run(&pair, 2, Some(Mistake { registered: None })).starts_with("WRONG: that keystroke is not one this deck sends."));
+        assert!(describe_run(&pair, 2, Some(Mistake { registered: None })).starts_with("WRONG: this deck can't identify that keystroke."));
     }
 }

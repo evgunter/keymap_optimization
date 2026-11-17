@@ -2,12 +2,14 @@
 
 use std::collections::HashSet;
 use std::io;
+
+use itertools::Itertools;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use twidlk_rust::twiddler_config::{generate_bin_config, sort_chords, ChordOutput, ChordWithOutput, TwiddlerConfig};
 
-use crate::chord::Chord;
+use crate::chord::{Chord, ThumbState};
 use crate::keystroke::{Keystroke, N_KEYSTROKES};
 
 /// The most chords a Twiddler 3 config can hold.
@@ -26,6 +28,10 @@ pub enum DeckError {
 
 /// Distinct chords that the Twiddler can see, few enough to fit in one config.
 /// The chord at position `i` sends keystroke `i`.
+///
+/// A deck also identifies chords it does not hold: for a chord with the ctrl, shift or alt thumb button that
+/// has no output of its own, the Twiddler sends the keystroke of the chord's finger buttons with a modifier
+/// added (see `Keystroke::split_thumb`).
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(try_from = "Vec<Chord>", into = "Vec<Chord>")]
 pub struct Deck {
@@ -55,9 +61,33 @@ impl Deck {
         })
     }
 
-    /// The chord that sends `keystroke`, if any chord in the deck does.
+    /// Every chord the Twiddler can see that uses no thumb button or the num button, fewest buttons first.
+    /// Loaded onto the Twiddler, it identifies every chord the Twiddler can see.
+    pub fn full() -> Self {
+        let chords = Chord::all()
+            .filter(|chord| chord.registers_as_itself() && matches!(chord.thumb(), ThumbState::Lifted | ThumbState::Num))
+            .sorted_by_key(|chord| (chord.n_buttons(), chord.button_mask()))
+            .collect();
+        Deck::new(chords).expect("the chords are distinct, registrable, and few enough for one config")
+    }
+
+    /// The chord that was pressed, given the keystroke the Twiddler sent for it while this deck was loaded.
+    /// `None` if the keystroke cannot have come from this deck.
     pub fn chord_for(&self, keystroke: Keystroke) -> Option<Chord> {
-        self.chords.get(keystroke.index()?).copied()
+        let (thumb, keystroke) = keystroke.split_thumb()?;
+        let chord = *self.chords.get(keystroke.index()?)?;
+        match thumb {
+            ThumbState::Lifted => Some(chord),
+            // the Twiddler only adds a thumb button's modifier to the keystroke of the remaining buttons if the
+            // whole chord has no keystroke of its own, and it does not do so for two thumb buttons
+            thumb => (chord.thumb() == ThumbState::Lifted && !self.chords.contains(&chord.with_thumb(thumb))).then(|| chord.with_thumb(thumb)),
+        }
+    }
+
+    /// Whether pressing `chord` with this deck loaded makes the Twiddler send a keystroke that identifies it.
+    pub fn identifies(&self, chord: &Chord) -> bool {
+        self.chords.contains(chord)
+            || (matches!(chord.thumb(), ThumbState::Ctrl | ThumbState::Shift | ThumbState::Alt) && self.chords.contains(&chord.with_thumb(ThumbState::Lifted)))
     }
 
     /// The contents of a `twiddler.cfg` file that makes each chord in the deck send its keystroke.
@@ -168,6 +198,79 @@ mod tests {
             assert_eq!(deck.chord_for(keystroke), Some(chord));
         }
         assert_eq!(deck.chord_for(Keystroke::from_index(MAX_CHORDS).unwrap()), None);
+    }
+
+    /// The keystroke the Twiddler sends for a chord with a thumb button that has no keystroke of its own.
+    fn fallback_keystroke(deck: &Deck, chord: &Chord) -> Keystroke {
+        let (_, keystroke) = deck.keystrokes().find(|(held, _)| *held == chord.with_thumb(ThumbState::Lifted)).unwrap();
+        let modifier = match chord.thumb() {
+            ThumbState::Ctrl => 0x01,
+            ThumbState::Shift => 0x02,
+            ThumbState::Alt => 0x04,
+            other => panic!("the Twiddler adds no modifier for {:?}", other),
+        };
+        Keystroke { modifiers: keystroke.modifiers | modifier, key: keystroke.key }
+    }
+
+    #[test]
+    fn the_full_deck_identifies_every_chord_the_twiddler_can_see() {
+        let deck = Deck::full();
+        assert_eq!(deck.chords().len(), 800);
+        let registrable: Vec<Chord> = Chord::all().filter(Chord::registers_as_itself).collect();
+        assert_eq!(registrable.len(), 2000);
+
+        let mut keystrokes = HashSet::new();
+        for chord in &registrable {
+            assert!(deck.identifies(chord), "{:?}", chord);
+            let keystroke = match deck.keystrokes().find(|(held, _)| held == chord) {
+                Some((_, keystroke)) => keystroke,
+                None => fallback_keystroke(&deck, chord),
+            };
+            assert_eq!(deck.chord_for(keystroke), Some(*chord));
+            assert!(keystrokes.insert(keystroke), "two chords send {:?}", keystroke);
+        }
+    }
+
+    #[test]
+    fn thumb_modifiers_identify_only_chords_without_a_keystroke_of_their_own() {
+        let [finger_chord, other] = chords(2).try_into().unwrap();
+        assert_eq!(finger_chord.thumb(), ThumbState::Lifted);
+        let ctrl_chord = finger_chord.with_thumb(ThumbState::Ctrl);
+        let num_chord = finger_chord.with_thumb(ThumbState::Num);
+
+        let deck = Deck::new(vec![finger_chord, other, num_chord]).unwrap();
+        assert!(deck.identifies(&ctrl_chord) && deck.identifies(&num_chord));
+        assert_eq!(deck.chord_for(fallback_keystroke(&deck, &ctrl_chord)), Some(ctrl_chord));
+        // a modifier on the keystroke of a chord that already uses the thumb means two thumb buttons were pressed
+        let (_, num_keystroke) = deck.keystrokes().find(|(held, _)| *held == num_chord).unwrap();
+        assert_eq!(deck.chord_for(Keystroke { modifiers: num_keystroke.modifiers | 0x01, key: num_keystroke.key }), None);
+        // the modifiers of two thumb buttons at once
+        let (_, keystroke) = deck.keystrokes().find(|(held, _)| *held == finger_chord).unwrap();
+        assert_eq!(deck.chord_for(Keystroke { modifiers: keystroke.modifiers | 0x03, key: keystroke.key }), None);
+
+        // with the ctrl chord in the deck, the Twiddler sends its own keystroke, never the finger chord's with a modifier
+        let deck = Deck::new(vec![finger_chord, ctrl_chord]).unwrap();
+        assert_eq!(deck.chord_for(fallback_keystroke(&deck, &ctrl_chord)), None);
+        let (_, own_keystroke) = deck.keystrokes().find(|(held, _)| *held == ctrl_chord).unwrap();
+        assert_eq!(deck.chord_for(own_keystroke), Some(ctrl_chord));
+
+        // without the finger chord in the deck, the Twiddler has nothing to send for the ctrl chord
+        assert!(!Deck::new(vec![other]).unwrap().identifies(&ctrl_chord));
+    }
+
+    #[test]
+    fn key_events_recorded_for_an_unmapped_ctrl_chord_identify_it() {
+        // recorded from the Twiddler: ctrl with a finger button whose own output was the letter a.
+        // the modifier arrives when the thumb button goes down, the letter when the chord is released.
+        const KEY_LEFTCTRL: u16 = 29;
+        const KEY_A: u16 = 30;
+        let finger_chord = chords(1)[0];
+        let deck = Deck::new(vec![finger_chord]).unwrap();
+        let mut decoder = crate::decode::KeystrokeDecoder::default();
+        assert_eq!(decoder.evdev_report(&[(KEY_LEFTCTRL, 1)]), Ok(None));
+        let keystroke = decoder.evdev_report(&[(KEY_A, 1)]).unwrap().unwrap();
+        assert_eq!(deck.chord_for(keystroke), Some(finger_chord.with_thumb(ThumbState::Ctrl)));
+        assert_eq!(decoder.evdev_report(&[(KEY_LEFTCTRL, 0), (KEY_A, 0)]), Ok(None));
     }
 
     #[test]

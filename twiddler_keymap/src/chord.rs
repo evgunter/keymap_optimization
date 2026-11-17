@@ -109,6 +109,11 @@ impl Chord {
         self.fingers
     }
 
+    /// The chord with the same finger buttons and the given thumb state.
+    pub fn with_thumb(&self, thumb: ThumbState) -> Chord {
+        Chord { thumb, fingers: self.fingers }
+    }
+
     /// Every chord, each exactly once.
     pub fn all() -> impl Iterator<Item = Chord> {
         ThumbState::VARIANTS.iter().flat_map(|thumb| {
