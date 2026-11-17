@@ -16,7 +16,7 @@ use twiddler_keymap::console::{render, spawn_inputs, Input, RawMode};
 use twiddler_keymap::deck::Deck;
 use twiddler_keymap::reader::KeystrokeReader;
 use twiddler_keymap::results::{append_record, read_records};
-use twiddler_keymap::timing::{median, Attempt, Command, Response, Session, Step, Summary, PRESSES_PER_RUN};
+use twiddler_keymap::timing::{median, Attempt, Command, Mistake, Response, Session, Step, Summary, PRESSES_PER_RUN};
 
 #[derive(Parser)]
 #[command(about = "Time alternating between the pairs of chords in a plan")]
@@ -63,16 +63,35 @@ fn message_for(response: &Response, pair: Option<[Chord; 2]>) -> String {
 
 fn describe_switches(label: &str, seconds: &[f64]) -> String {
     match median(seconds) {
-        Some(median) => format!("{}: median {:.0} ms over {} correct switches", label, median * 1000.0, seconds.len()),
-        None => format!("{}: no correct switches", label),
+        Some(median) => format!("{}: median {:.0} ms over {} switches", label, median * 1000.0, seconds.len()),
+        None => format!("{}: no switches", label),
     }
 }
 
 fn describe(summary: &Summary) -> String {
-    format!("{}\n{}\n{}",
-            if summary.exact { "Every chord was the right one." } else { "Not every chord was the right one." },
-            describe_switches("left to right", &summary.switches[0]),
-            describe_switches("right to left", &summary.switches[1]))
+    let wrong = match summary.n_wrong {
+        0 => "Every chord was right first time.".to_string(),
+        1 => "1 wrong chord along the way. Its switch is timed up to the correct chord.".to_string(),
+        n => format!("{} wrong chords along the way. Their switches are timed up to the correct chord.", n),
+    };
+    format!("{}\n{}\n{}", wrong, describe_switches("left to right", &summary.switches[0]), describe_switches("right to left", &summary.switches[1]))
+}
+
+/// What a run under way should say about the chord that arrived last and the chord it is waiting for.
+fn describe_run(pair: &[Chord; 2], n_correct: usize, mistake: Option<Mistake>) -> String {
+    let next = format!("Next: the {} chord.", if n_correct.is_multiple_of(2) { "LEFT" } else { "RIGHT" });
+    match mistake {
+        None => next,
+        Some(Mistake { registered: None }) => format!("WRONG: that keystroke is not one this deck sends. {}", next),
+        Some(Mistake { registered: Some(chord) }) => {
+            let which = match pair.iter().position(|expected| *expected == chord) {
+                Some(0) => "the left chord again".to_string(),
+                Some(_) => "the right chord again".to_string(),
+                None => format!("this:\n\n{}", chord),
+            };
+            format!("WRONG: that registered as {}\n{}", which, next)
+        }
+    }
 }
 
 fn pair_of(step: &Step) -> Option<[Chord; 2]> {
@@ -87,15 +106,16 @@ fn screen(session: &Session, message: &str) -> String {
         Step::Practice { trial, pair } => format!(
             "Trial {} of {}\n\n\
              Alternate between these two chords, starting with the left one:\n\n{}\n\
-             Practise as much as you like. The timed run is {} chords, and its clock starts with your first chord.\n\n\
+             Practise as much as you like. The timed run takes {} correct chords, and its clock starts with your\n\
+             first chord. A wrong chord doesn't count: press the same one until it registers.\n\n\
              space  start the timed run\n\
              q      quit",
             trial + 1, session.n_trials(), side_by_side(&pair), PRESSES_PER_RUN),
-        Step::Run { trial, pair, n_presses } => format!(
-            "Trial {} of {}: timed run, {} of {} chords\n\n{}\n\
+        Step::Run { trial, pair, n_correct, mistake } => format!(
+            "Trial {} of {}: timed run, {} of {} chords\n\n{}\n{}\n\n\
              r  give up this run and go back to practising\n\
              q  quit",
-            trial + 1, session.n_trials(), n_presses, PRESSES_PER_RUN, side_by_side(&pair)),
+            trial + 1, session.n_trials(), n_correct, PRESSES_PER_RUN, side_by_side(&pair), describe_run(&pair, n_correct, mistake)),
         Step::Review { trial, pair, summary } => format!(
             "Trial {} of {}: run complete\n\n{}\n{}\n\n\
              space  keep this run and go on\n\
@@ -164,5 +184,19 @@ mod tests {
         // the right chord is drawn from the same column on every line
         let right = pair[1].to_string();
         assert!(drawn.lines().zip(right.lines()).all(|(line, right_line)| line.ends_with(right_line) && line.width() - right_line.width() == 14));
+    }
+
+    #[test]
+    fn a_run_says_which_chord_is_next_and_what_went_wrong() {
+        let pair = [
+            Chord::new(ThumbState::Lifted, [L, Lifted, Lifted, Lifted]).unwrap(),
+            Chord::new(ThumbState::Lifted, [Lifted, R, Lifted, Lifted]).unwrap(),
+        ];
+        let other = Chord::new(ThumbState::Lifted, [Lifted, Lifted, Lifted, LMR]).unwrap();
+        assert_eq!(describe_run(&pair, 0, None), "Next: the LEFT chord.");
+        assert_eq!(describe_run(&pair, 3, None), "Next: the RIGHT chord.");
+        assert_eq!(describe_run(&pair, 1, Some(Mistake { registered: Some(pair[0]) })), "WRONG: that registered as the left chord again\nNext: the RIGHT chord.");
+        assert_eq!(describe_run(&pair, 2, Some(Mistake { registered: Some(other) })), format!("WRONG: that registered as this:\n\n{}\nNext: the LEFT chord.", other));
+        assert!(describe_run(&pair, 2, Some(Mistake { registered: None })).starts_with("WRONG: that keystroke is not one this deck sends."));
     }
 }

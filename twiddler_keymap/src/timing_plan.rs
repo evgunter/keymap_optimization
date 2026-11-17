@@ -11,6 +11,7 @@ use rand::seq::{IndexedRandom, SliceRandom};
 use rand::{Rng, RngExt};
 
 use crate::chord::{Chord, FingerState, ThumbState, N_FINGERS};
+use crate::deck::MAX_CHORDS;
 use crate::sweep::{Comfort, Outcome};
 
 /// One trial in this many is a repeat.
@@ -109,6 +110,19 @@ pub fn plan(outcomes: &HashMap<Chord, Outcome>, rng: &mut impl Rng) -> Result<Ve
     let references = references(outcomes)?;
     let base = base_trials(&candidates(outcomes), &references, rng);
     Ok(with_repeats(&base, &references, rng))
+}
+
+/// The chords for the deck used with a plan: the plan's chords, and as many others as fit, fewest buttons first.
+/// The Twiddler sends nothing for a chord outside the deck, so the others are there to let a mistaken chord be
+/// recognised and shown.
+pub fn deck_chords(plan: &[[Chord; 2]]) -> Vec<Chord> {
+    let by_size = |chord: &Chord| (chord.n_buttons(), chord.button_mask());
+    let planned: Vec<Chord> = plan.iter().flatten().copied().unique().collect();
+    let others = Chord::all()
+        .filter(|chord| chord.registers_as_itself() && !planned.contains(chord))
+        .sorted_by_key(by_size)
+        .take(MAX_CHORDS.saturating_sub(planned.len()));
+    planned.iter().copied().chain(others).sorted_by_key(by_size).collect()
 }
 
 #[cfg(test)]
@@ -237,6 +251,21 @@ mod tests {
         base[REPEAT_EVERY - 2] = [b, a];
         let plan = with_repeats(&base, &references, &mut StdRng::seed_from_u64(0));
         assert_eq!(plan[REPEAT_EVERY - 1], [a, c]);
+    }
+
+    #[test]
+    fn the_deck_holds_the_plan_and_is_filled_with_the_smallest_other_chords() {
+        let [a, b, _, _] = middle_buttons();
+        let large = chord([FingerState::LMR, FingerState::LMR, FingerState::LMR, FingerState::LMR]);
+        let chords = deck_chords(&[[a, b], [large, a]]);
+        assert_eq!(chords.len(), MAX_CHORDS);
+        assert!(crate::deck::Deck::new(chords.clone()).is_ok());
+        assert!([a, b, large].iter().all(|chord| chords.contains(chord)));
+
+        // every chord left out has at least as many buttons as every chord added to the plan's
+        let largest_added = chords.iter().filter(|chord| **chord != large).map(|chord| chord.n_buttons()).max().unwrap();
+        let smallest_left_out = Chord::all().filter(|chord| chord.registers_as_itself() && !chords.contains(chord)).map(|chord| chord.n_buttons()).min().unwrap();
+        assert!(smallest_left_out >= largest_added, "{} left out, {} added", smallest_left_out, largest_added);
     }
 
     #[test]
